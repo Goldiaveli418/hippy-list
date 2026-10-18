@@ -1,0 +1,13 @@
+{
+  "name": "Hippy List",
+  "short_name": "Hippy List",
+  "description": "Tie-dye order shop — collect, organize, and price production.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#efece4",
+  "theme_color": "#efece4",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
