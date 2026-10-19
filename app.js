@@ -26,6 +26,7 @@ const stageIdx = k => Math.max(0,STAGES.findIndex(s=>s.key===k));
 
 const DEFAULT_PRICING = {
   laborRate:25, markup:2.2, roundTo:0.5,
+  rush:{type:"percent",amount:25},
   materials:[
     {name:"Fiber-reactive dye",cost:0.60,per:"color"},
     {name:"Soda ash soak",cost:0.25,per:"piece"},
@@ -140,7 +141,10 @@ function suggestP(it){return roundP(itemCost(it)*(+S.pricing.markup||1));}
 function itemUnit(it){return (it.price===""||it.price==null)?suggestP(it):+it.price||0;}
 function orderChargeLive(){const r=matSum("order")*(+S.pricing.markup||1);return r>0?roundP(r):0;}
 function orderSubtotal(o){return (o.items||[]).reduce((s,it)=>s+itemUnit(it)*(+it.qty||0),0);}
-function orderTotal(o){const c=(o.orderCharge!=null)?+o.orderCharge||0:orderChargeLive();return orderSubtotal(o)+c;}
+function rushLive(o){const r=S.pricing.rush||{},a=+r.amount||0;if(a<=0)return 0;if(r.type==="flat")return a;if(r.type==="piece")return a*orderPieces(o);return roundP(orderSubtotal(o)*a/100);}
+function rushOf(o){const c=o.customer||{};if(!c.rush)return 0;return c.rushFee!=null?+c.rushFee||0:rushLive(o);}
+function rushLabel(){const r=S.pricing.rush||{},a=+r.amount||0;return r.type==="flat"?`+${money(a)}`:r.type==="piece"?`+${money(a)}/pc`:`+${a}%`;}
+function orderTotal(o){const c=(o.orderCharge!=null)?+o.orderCharge||0:orderChargeLive();return orderSubtotal(o)+c+rushOf(o);}
 function orderCost(o){return (o.items||[]).reduce((s,it)=>s+itemCost(it)*(+it.qty||0),0);}
 function orderPieces(o){return (o.items||[]).reduce((s,it)=>s+(+it.qty||0),0);}
 function balance(o){return orderTotal(o)-(o.paid?orderTotal(o):(+o.deposit||0));}
@@ -195,7 +199,7 @@ function renderBoard(){
   h+=`<div class="toolbar"><div class="search">${searchIco()}<input id="search" value="${esc(search)}" placeholder="Search orders, customers, #"></div></div>`;
   h+=`<div class="board">`;
   STAGES.forEach(s=>{
-    const inSt=shown.filter(o=>o.status===s.key).sort((a,b)=>dueKey(a)-dueKey(b));
+    const inSt=shown.filter(o=>o.status===s.key).sort((a,b)=>(rushOn(b)-rushOn(a))||(dueKey(a)-dueKey(b)));
     h+=`<section class="col"><div class="colhead"><span class="dot" style="background:${s.hex}"></span><span class="colname">${s.label}</span><span class="n tnum">${inSt.length}</span></div>
       <div class="col-body">${inSt.length?inSt.map(o=>boardCard(o,s)).join(""):`<div class="col-empty">—</div>`}</div></section>`;
   });
@@ -204,8 +208,9 @@ function renderBoard(){
 function boardCard(o,s){
   const dc=dueClass(o.customer&&o.customer.due), idx=stageIdx(o.status);
   const prog = o.status==="dyeing"?`<div class="bars"><i style="background:${s.hex}"></i><i style="background:${s.hex}"></i><i></i><i></i></div>`:"";
-  return `<article class="ocard" tabindex="0" role="button" data-open="${o.id}">
+  return `<article class="ocard${rushOn(o)?" rush":""}" tabindex="0" role="button" data-open="${o.id}">
     <div class="oc-top"><span class="cust">${esc(o.customer&&o.customer.name||"Unnamed")}</span><span class="ref">HL-${o.ref||"—"}</span></div>
+    ${rushOn(o)?`<div class="rush-tag">⚡ RUSH</div>`:""}
     ${o.customer&&o.customer.due?`<div class="oc-due ${dc}">Due ${fmtDue(o.customer.due)}</div>`:`<div class="oc-due">${orderPieces(o)} pieces</div>`}
     ${prog}
     <div class="oc-meta"><span>${o.items.map(it=>it.technique).slice(0,2).join(", ")}${o.paid?' · <span class="paid">Paid</span>':""}</span><span class="tot tnum">${money(orderTotal(o))}</span></div>
@@ -223,7 +228,7 @@ function renderOrders(){
   h+=`<div class="panel" style="padding:0"><div class="tablewrap"><table class="data"><thead><tr><th>Order</th><th>Customer</th><th>Stage</th><th>Pieces</th><th>Due</th><th style="text-align:right">Total</th><th style="text-align:right">Balance</th></tr></thead><tbody>`;
   list.forEach(o=>{const st=stageOf(o.status);h+=`<tr class="rowlink" data-open="${o.id}">
     <td><b class="tnum" style="color:var(--berry)">HL-${o.ref||"—"}</b></td>
-    <td class="nm">${esc(o.customer&&o.customer.name||"Unnamed")}</td>
+    <td class="nm">${esc(o.customer&&o.customer.name||"Unnamed")}${rushOn(o)?' <span class="rush-tag sm">⚡ RUSH</span>':""}</td>
     <td><span class="badge" style="color:${st.hex}">● ${st.label}</span></td>
     <td class="tnum">${orderPieces(o)}</td>
     <td>${o.customer&&o.customer.due?`<span class="${dueClass(o.customer.due)==='over'?'low':''}">${fmtDue(o.customer.due)}</span>`:"—"}</td>
@@ -234,7 +239,7 @@ function renderOrders(){
 
 /* ─────────── Builder (new / edit order) ─────────── */
 function renderBuilder(){
-  const t=draft,sub=orderSubtotal(t),chg=orderChargeLive(),tot=sub+chg,dep=+t.deposit||0;
+  const t=draft,sub=orderSubtotal(t),chg=orderChargeLive(),rsh=rushOf(t),tot=sub+chg+rsh,dep=+t.deposit||0;
   const names=[...new Set(S.orders.map(o=>o.customer&&o.customer.name).concat(S.customers.map(c=>c.name)).filter(Boolean))];
   return `<div class="view-head"><h1>${editId?"Edit order":"New order"}</h1><div class="sub">${editId?`HL-${(S.orders.find(o=>o.id===editId)||{}).ref||""}`:"Build it and it prices itself"}</div></div>
   <div class="builder"><div>
@@ -253,8 +258,10 @@ function renderBuilder(){
   </div>
   <div class="side"><div class="invoice">
     <div class="dr-sec-t">Order total</div>
+    <label class="rush-toggle"><input type="checkbox" id="d-rush" ${t.customer.rush?"checked":""}><span><b>⚡ Rush order</b><small id="rush-lbl">${rushLabel()} · set in Pricing</small></span></label>
     <div class="inv-row"><span>Subtotal · <span class="tnum" id="sum-pc">${orderPieces(t)}</span> pc</span><b class="tnum" id="sum-sub">${money(sub)}</b></div>
     <div class="inv-row" id="sum-chg-row" style="${chg>0?"":"display:none"}"><span>Order charge</span><b class="tnum" id="sum-chg">${money(chg)}</b></div>
+    <div class="inv-row" id="sum-rush-row" style="${rsh>0?"":"display:none"}"><span>Rush fee</span><b class="tnum" id="sum-rush">${money(rsh)}</b></div>
     <div class="inv-row total"><span>Total</span><span class="big tnum" id="sum-tot">${money(tot)}</span></div>
     <div class="inv-dep"><span style="font-size:13px;color:var(--muted)">Deposit $</span><input class="tnum" id="d-dep" type="number" min="0" step="1" value="${t.deposit||""}" placeholder="0"></div>
     <div class="inv-row"><span>Balance due</span><b class="tnum" id="sum-bal">${money(tot-dep)}</b></div>
@@ -361,6 +368,10 @@ function renderPricing(){
   const techRows=p.techniques.map((t,i)=>`<tr><td><input class="rate-name" data-tt="name" data-ti="${i}" value="${esc(t.name)}"></td><td><input data-tt="min" data-ti="${i}" type="number" min="0" step="1" value="${t.min}"></td><td style="text-align:right"><button class="btn sm ghost danger" data-trm="${i}">✕</button></td></tr>`).join("");
   return `<div class="view-head"><h1>Pricing</h1><div class="sub">Your cost model — every order prices from here</div><div class="right"><button class="btn berry" id="savePricing">Save pricing</button></div></div>
   <div class="banner">Set these to your real blank costs, ink prices, dye-time and margin. Edits apply to new orders; saved orders keep their quoted price.</div>
+  <div class="panel"><h2>Rush orders</h2><div class="grid3">
+    <label class="fld">Charge rush as<select class="inp" id="s-rush-type"><option value="percent" ${p.rush.type==="percent"?"selected":""}>% of the order</option><option value="flat" ${p.rush.type==="flat"?"selected":""}>Flat fee per order</option><option value="piece" ${p.rush.type==="piece"?"selected":""}>Per piece</option></select></label>
+    <label class="fld"><span id="s-rush-unit">${p.rush.type==="percent"?"Rush %":"Rush $"}</span><input class="inp tnum" id="s-rush-amt" type="number" min="0" step="1" value="${p.rush.amount}"></label></div>
+    <div class="hint">Added when you flip “Rush order” on an order. Rush orders jump to the top of the board.</div></div>
   <div class="panel"><h2>Shop rates</h2><div class="grid3">
     <label class="fld">Labor rate ($/hr)<input class="inp tnum" id="s-labor" type="number" min="0" step="1" value="${p.laborRate}"></label>
     <label class="fld">Markup (× cost)<input class="inp tnum" id="s-markup" type="number" min="1" step="0.1" value="${p.markup}"></label>
@@ -447,6 +458,7 @@ function wireBuilder(){
   bind("d-name",v=>draft.customer.name=v); bind("d-phone",v=>draft.customer.phone=v); bind("d-email",v=>draft.customer.email=v);
   bind("d-due",v=>draft.customer.due=v); bind("d-kind",v=>draft.customer.kind=v); bind("d-notes",v=>draft.notes=v);
   const dep=document.getElementById("d-dep"); if(dep) dep.oninput=()=>{draft.deposit=num(dep.value);soft();};
+  const rz=document.getElementById("d-rush"); if(rz) rz.onchange=()=>{draft.customer.rush=rz.checked;soft();};
   document.querySelectorAll("#items [data-f]").forEach(el=>{const i=+el.dataset.i,f=el.dataset.f;el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{draft.items[i][f]=el.value;soft();});});
   document.querySelectorAll("[data-bd]").forEach(b=>b.onclick=()=>{const el=document.getElementById("bd-"+b.dataset.bd);el.classList.toggle("open");b.textContent=el.classList.contains("open")?"hide math":"price math";});
   document.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{draft.items.splice(+b.dataset.rm,1);rerender();});
@@ -456,8 +468,8 @@ function wireBuilder(){
 }
 function soft(){
   draft.items.forEach((it,i)=>{const row=document.querySelector(`.lineitem[data-i="${i}"]`);if(!row)return;const p=row.querySelector('[data-f="price"]');if(p)p.placeholder=String(suggestP(it));const bd=row.querySelector(".breakdown");if(bd)bd.textContent=priceMath(it);});
-  const sub=orderSubtotal(draft),chg=orderChargeLive(),tot=sub+chg,dep=num(draft.deposit);
-  setTxt("sum-sub",money(sub));setTxt("sum-chg",money(chg));setTxt("sum-tot",money(tot));setTxt("sum-bal",money(tot-dep));setTxt("sum-pc",orderPieces(draft));
+  const sub=orderSubtotal(draft),chg=orderChargeLive(),rsh=rushOf(draft),tot=sub+chg+rsh,dep=num(draft.deposit);
+  setTxt("sum-sub",money(sub));setTxt("sum-chg",money(chg));setTxt("sum-rush",money(rsh));const rr=document.getElementById("sum-rush-row");if(rr)rr.style.display=rsh>0?"":"none";setTxt("sum-tot",money(tot));setTxt("sum-bal",money(tot-dep));setTxt("sum-pc",orderPieces(draft));
   const cr=document.getElementById("sum-chg-row");if(cr)cr.style.display=chg>0?"":"none";
 }
 function wireInventory(){
@@ -470,6 +482,7 @@ function wireInventory(){
 function wirePricing(){
   const n=(id,k)=>{const el=document.getElementById(id);if(el)el.oninput=()=>S.pricing[k]=num(el.value);};
   n("s-labor","laborRate");n("s-markup","markup");n("s-round","roundTo");
+  const rt=document.getElementById("s-rush-type"),ra=document.getElementById("s-rush-amt"); if(rt) rt.onchange=()=>{S.pricing.rush.type=rt.value;document.getElementById("s-rush-unit").textContent=rt.value==="percent"?"Rush %":"Rush $";}; if(ra) ra.oninput=()=>{S.pricing.rush.amount=num(ra.value);};
   document.querySelectorAll("[data-mt]").forEach(el=>{const i=+el.dataset.mi,f=el.dataset.mt;el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{S.pricing.materials[i][f]=f==="cost"?num(el.value):el.value;});});
   document.querySelectorAll("[data-mrm]").forEach(b=>b.onclick=()=>{S.pricing.materials.splice(+b.dataset.mrm,1);rerender();});
   document.querySelectorAll("[data-bt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.bi,f=el.dataset.bt;S.pricing.blanks[i][f]=f==="cost"?num(el.value):el.value;});
@@ -496,6 +509,7 @@ async function saveOrder(){
   const clean=draft.items.filter(it=>+it.qty>0); if(!clean.length){toast("Add at least one piece");return;}
   const items=clean.map(it=>({garment:it.garment,size:it.size,qty:+it.qty||0,technique:it.technique,palette:it.palette,colors:+it.colors||0,price:itemUnit(it)}));
   const cust={name:draft.customer.name.trim(),phone:draft.customer.phone||"",email:draft.customer.email||"",due:draft.customer.due||"",kind:draft.customer.kind||"retail"};
+  if(draft.customer.rush){cust.rush=true;cust.rushFee=rushLive({items});}
   if(editId){
     const ex=S.orders.find(o=>o.id===editId)||{};
     if(ex.customer&&ex.customer.invoicedAt) cust.invoicedAt=ex.customer.invoicedAt;
@@ -536,8 +550,8 @@ function closeDrawer(){openId=null;document.getElementById("drawer").classList.r
 function renderDrawer(){ openKind==="customer"?renderCustDrawer():renderOrderDrawer(); }
 function renderOrderDrawer(){
   const o=S.orders.find(x=>x.id===openId); const d=document.getElementById("drawer"); if(!o){closeDrawer();return;}
-  const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,tot=sub+chg,dep=+o.deposit||0;
-  d.innerHTML=`<div class="dr-head"><div style="min-width:0;flex:1"><div class="cust">${esc(o.customer.name||"Unnamed")}</div>
+  const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tot=sub+chg+rsh,dep=+o.deposit||0;
+  d.innerHTML=`<div class="dr-head"><div style="min-width:0;flex:1"><div class="cust">${esc(o.customer.name||"Unnamed")}${rushOn(o)?' <span class="rush-tag sm">⚡ RUSH</span>':""}</div>
     <div class="sub">HL-${o.ref||"—"} · ${o.customer.phone?esc(o.customer.phone)+" · ":""}${o.customer.due?"due "+fmtDue(o.customer.due):"no due date"}</div></div>
     <button class="icon-btn" id="drClose">✕</button></div>
   <div class="dr-body">
@@ -546,6 +560,7 @@ function renderOrderDrawer(){
     <div><div class="dr-sec-t">Invoice</div>
       <div class="inv-row"><span>Subtotal</span><b class="tnum">${money(sub)}</b></div>
       ${chg>0?`<div class="inv-row"><span>Order charge</span><b class="tnum">${money(chg)}</b></div>`:""}
+      ${rsh>0?`<div class="inv-row"><span>Rush fee</span><b class="tnum">${money(rsh)}</b></div>`:""}
       <div class="inv-row total"><span>Total</span><span class="big tnum">${money(tot)}</span></div>
       <div class="inv-row"><span>${o.paid?"Paid in full":"Deposit"}</span><b class="tnum">${money(o.paid?tot:dep)}</b></div>
       <div class="inv-row"><span>Balance due</span><b class="tnum">${o.paid?'<span class="paid">Paid</span>':money(tot-dep)}</b></div>
@@ -597,7 +612,7 @@ async function addPhoto(o,file){
 }
 
 /* ─────────── Hand-off / export ─────────── */
-function invTotals(o){const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,tot=sub+chg,dep=o.paid?tot:(+o.deposit||0);return {sub,chg,tot,dep,bal:tot-dep};}
+function invTotals(o){const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tot=sub+chg+rsh,dep=o.paid?tot:(+o.deposit||0);return {sub,chg,rsh,tot,dep,bal:tot-dep};}
 function invSubject(o){return `Invoice HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`;}
 async function markSent(o){ o.customer={...o.customer,invoicedAt:new Date().toISOString()}; if(LIVE){try{await sb.from("orders").update({customer:o.customer}).eq("id",o.id);}catch(e){}} else saveLocal(); if(openId===o.id) renderDrawer(); }
 /* PDF invoices — built on-device with jsPDF (vector text, loads on first use) */
@@ -648,7 +663,7 @@ async function buildInvoicePdf(o){
   const need=150+(st.payWith&&!o.paid?70:0)+(st.invoiceNote?30:0); if(y+need>H-M){doc.addPage();y=M+10;}
   const tx=R-230; y+=8;
   const trow=(l,v)=>{doc.setFont("helvetica","normal");doc.setFontSize(10.5);col(MUTED);txt(l,tx,y);doc.setFont("helvetica","bold");col(INK);txt(v,R,y,{align:"right"});y+=18;};
-  trow("Subtotal",money(t.sub)); if(t.chg>0) trow("Order charge",money(t.chg));
+  trow("Subtotal",money(t.sub)); if(t.chg>0) trow("Order charge",money(t.chg)); if(t.rsh>0) trow("Rush fee",money(t.rsh));
   doc.setDrawColor(INK[0],INK[1],INK[2]);doc.setLineWidth(1.6);doc.line(tx,y-6,R,y-6); y+=16;
   doc.setFont("times","bold");doc.setFontSize(18);col(INK);txt("Total",tx,y);txt(money(t.tot),R,y,{align:"right"}); y+=22;
   if(o.paid){
@@ -683,19 +698,20 @@ async function sendPdf(o){
 async function downloadPdf(o){ try{ toast("Building PDF…"); saveBlob(await buildInvoicePdf(o)); toast("PDF saved"); }catch(e){ toast("Couldn't build PDF — check connection"); } }
 function ticketText(o){const L=[`${S.settings.shop||"Hippy List"} — WORK TICKET`,`Order HL-${o.ref||""} · ${o.customer.name||""}`];if(o.customer.due)L.push("DUE: "+fmtDate(o.customer.due));L.push("Stage: "+stageOf(o.status).label,"");o.items.forEach(it=>{L.push(`[ ] ${+it.qty||0}x  ${it.garment} (${it.size})`);L.push(`      ${it.technique} · ${it.palette} · ${it.colors} dye colors`);});if(o.notes){L.push("","NOTES: "+o.notes);}return L.join("\n");}
 function downloadTicket(o){downloadFile(`HippyList-HL${o.ref||""}.txt`,ticketText(o));}
-function exportOrders(){const rows=[["Order","Customer","Type","Stage","Pieces","Due","Total","Deposit","Paid","Created"]];S.orders.forEach(o=>rows.push([`HL-${o.ref||""}`,o.customer.name||"",o.customer.kind||"",stageOf(o.status).label,orderPieces(o),o.customer.due||"",orderTotal(o).toFixed(2),(+o.deposit||0).toFixed(2),o.paid?"yes":"no",(o.createdAt||"").slice(0,10)]));downloadFile("hippy-orders.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
+function exportOrders(){const rows=[["Order","Customer","Type","Stage","Pieces","Due","Rush","Total","Deposit","Paid","Created"]];S.orders.forEach(o=>rows.push([`HL-${o.ref||""}`,o.customer.name||"",o.customer.kind||"",stageOf(o.status).label,orderPieces(o),o.customer.due||"",rushOn(o)?rushOf(o).toFixed(2):"",orderTotal(o).toFixed(2),(+o.deposit||0).toFixed(2),o.paid?"yes":"no",(o.createdAt||"").slice(0,10)]));downloadFile("hippy-orders.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
 function exportCustomers(){const rows=[["Name","Type","Phone","Email","Orders","Lifetime"]];custAgg().forEach(c=>rows.push([c.name,c.kind,c.phone||"",c.email||"",c.orders,c.spent.toFixed(2)]));downloadFile("hippy-customers.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
 function downloadFile(name,text){const b=new Blob([text],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1500);}
 
 /* ─────────── Helpers ─────────── */
 function freshItem(){return {garment:S.pricing.blanks[0].name,size:"L",qty:1,technique:S.pricing.techniques[0].name,palette:"Rainbow",colors:3,price:""};}
-function freshDraft(){return {customer:{name:"",phone:"",email:"",due:"",kind:"retail"},items:[freshItem()],deposit:"",notes:""};}
-function loadDraft(o){editId=o.id;draft={customer:{name:o.customer.name||"",phone:o.customer.phone||"",email:o.customer.email||"",due:o.customer.due||"",kind:o.customer.kind||"retail"},deposit:o.deposit||"",notes:o.notes||"",items:(o.items||[]).map(it=>({garment:it.garment,size:it.size,qty:it.qty,technique:it.technique,palette:it.palette,colors:it.colors,price:it.price==null?"":it.price}))};if(!draft.items.length)draft.items=[freshItem()];}
+function freshDraft(){return {customer:{name:"",phone:"",email:"",due:"",kind:"retail",rush:false},items:[freshItem()],deposit:"",notes:""};}
+function loadDraft(o){editId=o.id;draft={customer:{name:o.customer.name||"",phone:o.customer.phone||"",email:o.customer.email||"",due:o.customer.due||"",kind:o.customer.kind||"retail",rush:!!o.customer.rush},deposit:o.deposit||"",notes:o.notes||"",items:(o.items||[]).map(it=>({garment:it.garment,size:it.size,qty:it.qty,technique:it.technique,palette:it.palette,colors:it.colors,price:it.price==null?"":it.price}))};if(!draft.items.length)draft.items=[freshItem()];}
+function rushOn(o){return o&&o.customer&&o.customer.rush?1:0;}
 function nextRef(){return Math.max(1000,...S.orders.map(o=>+o.ref||0))+1;}
 function clone(o){return JSON.parse(JSON.stringify(o));}
 function num(v){const n=parseFloat(v);return isNaN(n)?0:n;}
 function uid(){return "x"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
-function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
+function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});if(!o.rush||typeof o.rush!=="object")o.rush=clone(DEFAULT_PRICING.rush);if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
 function money(n){n=+n||0;return "$"+n.toLocaleString("en-US",{minimumFractionDigits:(n%1?2:0),maximumFractionDigits:2});}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function csv(s){s=String(s==null?"":s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
