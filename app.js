@@ -10,7 +10,7 @@ const CFG = window.HIPPY_CONFIG || {};
 const LIVE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase);
 const sb = LIVE ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
 const LS = "hippylist.app.v1";
-const APP_VERSION = "202610182337";
+const APP_VERSION = "202610182348";
 /* Auto-update: phones and home-screen apps cache files, so check for a newer deploy and reload into it. */
 async function checkUpdate(){ try{ const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const {v}=await r.json(); if(v&&v!==APP_VERSION&&!sessionStorage.getItem("hl-upd-"+v)){ sessionStorage.setItem("hl-upd-"+v,"1"); location.replace(location.pathname+"?v="+v); } }catch(e){} }
 checkUpdate(); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") checkUpdate(); });
@@ -420,28 +420,42 @@ function pipelinePanel(){
 function exportReport(){const r=rangeBounds(rptRange),list=S.orders.filter(o=>inRange(o,r));const rows=[["Order","Date","Customer","Type","Stage","Pieces","Rush fee","Sales tax","Total","Collected","Balance","Blank cost","Labor","Dyes","Materials","Est. profit"]];list.forEach(o=>{const c=costParts(o),t=orderTotal(o),tx=taxOf(o);rows.push([`HL-${o.ref||""}`,(o.createdAt||"").slice(0,10),(o.customer||{}).name||"",(o.customer||{}).kind||"",stageOf(o.status).label,orderPieces(o),rushOf(o).toFixed(2),tx.toFixed(2),t.toFixed(2),collectedOf(o).toFixed(2),balance(o).toFixed(2),c.blank.toFixed(2),c.labor.toFixed(2),c.dye.toFixed(2),c.mat.toFixed(2),(t-tx-c.blank-c.labor-c.dye-c.mat).toFixed(2)]);});downloadFile(`hippy-report-${rptRange}.csv`,rows.map(x=>x.map(csv).join(",")).join("\n"));toast("Exported");}
 
 /* ─────────── Pricing ─────────── */
+let prDirty=false, pcBlank=0, pcTech=0, pcColors=3;
 function renderPricing(){
-  const p=S.pricing;
-  const matRows=(p.materials||[]).map((m,i)=>`<tr><td><input class="rate-name" data-mt="name" data-mi="${i}" value="${esc(m.name)}"></td><td><input data-mt="cost" data-mi="${i}" type="number" min="0" step="0.05" value="${m.cost}"></td><td><select data-mt="per" data-mi="${i}"><option value="piece" ${m.per==="piece"?"selected":""}>per piece</option><option value="color" ${m.per==="color"?"selected":""}>per dye color</option><option value="order" ${m.per==="order"?"selected":""}>per order</option></select></td><td style="text-align:right"><button class="btn sm ghost danger" data-mrm="${i}">✕</button></td></tr>`).join("");
-  const blankRows=p.blanks.map((b,i)=>`<tr><td><input class="rate-name" data-bt="name" data-bi="${i}" value="${esc(b.name)}"></td><td><input data-bt="cost" data-bi="${i}" type="number" min="0" step="0.25" value="${b.cost}"></td><td style="text-align:right"><button class="btn sm ghost danger" data-brm="${i}">✕</button></td></tr>`).join("");
-  const techRows=p.techniques.map((t,i)=>`<tr><td><input class="rate-name" data-tt="name" data-ti="${i}" value="${esc(t.name)}"></td><td><input data-tt="min" data-ti="${i}" type="number" min="0" step="1" value="${t.min}"></td><td style="text-align:right"><button class="btn sm ghost danger" data-trm="${i}">✕</button></td></tr>`).join("");
-  return `<div class="view-head"><h1>Pricing</h1><div class="sub">Your cost model — every order prices from here</div><div class="right"><button class="btn berry" id="savePricing">Save pricing</button></div></div>
-  <div class="banner">Set these to your real blank costs, ink prices, dye-time and margin. Edits apply to new orders; saved orders keep their quoted price.</div>
-  <div class="panel"><h2>Sales tax</h2><div class="grid3">
-    <label class="fld">Sales tax rate %<input class="inp tnum" id="s-tax" type="number" min="0" max="20" step="0.05" value="${p.taxRate||0}" placeholder="0"></label></div>
-    <div class="hint">Leave at 0 until you have an Ohio vendor's license. Use your county's total rate. Tax covers the whole order (pieces, rush, order charges). Wholesale orders are exempt automatically; flip “Tax exempt” on any order to change it.</div></div>
-  <div class="panel"><h2>Rush orders</h2><div class="grid3">
-    <label class="fld">Charge rush as<select class="inp" id="s-rush-type"><option value="percent" ${p.rush.type==="percent"?"selected":""}>% of the order</option><option value="flat" ${p.rush.type==="flat"?"selected":""}>Flat fee per order</option><option value="piece" ${p.rush.type==="piece"?"selected":""}>Per piece</option></select></label>
-    <label class="fld"><span id="s-rush-unit">${p.rush.type==="percent"?"Rush %":"Rush $"}</span><input class="inp tnum" id="s-rush-amt" type="number" min="0" step="1" value="${p.rush.amount}"></label></div>
-    <div class="hint">Added when you flip “Rush order” on an order. Rush orders jump to the top of the board.</div></div>
-  <div class="panel"><h2>Shop rates</h2><div class="grid3">
-    <label class="fld">Labor rate ($/hr)<input class="inp tnum" id="s-labor" type="number" min="0" step="1" value="${p.laborRate}"></label>
-    <label class="fld">Markup (× cost)<input class="inp tnum" id="s-markup" type="number" min="1" step="0.1" value="${p.markup}"></label>
-    <label class="fld">Round to nearest $<input class="inp tnum" id="s-round" type="number" min="0" step="0.25" value="${p.roundTo}"></label></div>
-    <div class="hint">Labor = minutes per technique (below) × this hourly rate.</div></div>
-  <div class="panel"><h2>Dyes & materials</h2><div class="tablewrap"><table class="data rates"><thead><tr><th>Material / ink</th><th>Cost $</th><th>Charged</th><th></th></tr></thead><tbody>${matRows}</tbody></table></div><button class="btn sm" id="addMat" style="margin-top:12px">+ Add dye / material</button><div class="hint">“Per dye color” × the colors in each piece. “Per order” is added once.</div></div>
-  <div class="panel"><h2>Blanks (cost each)</h2><div class="tablewrap"><table class="data rates"><thead><tr><th>Garment</th><th>Cost $</th><th></th></tr></thead><tbody>${blankRows}</tbody></table></div><button class="btn sm" id="addBlank" style="margin-top:12px">+ Add garment</button></div>
-  <div class="panel"><h2>Techniques (minutes each)</h2><div class="tablewrap"><table class="data rates"><thead><tr><th>Technique</th><th>Minutes</th><th></th></tr></thead><tbody>${techRows}</tbody></table></div><button class="btn sm" id="addTech" style="margin-top:12px">+ Add technique</button></div>`;
+  const p=S.pricing, B=p.blanks, T=p.techniques, M=p.materials||[];
+  const pcB=B[Math.min(pcBlank,B.length-1)]||{name:""}, pcT=T[Math.min(pcTech,T.length-1)]||{name:""};
+  const del=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
+  const numIn=(attrs,val,pre,suf,step)=>`<label class="pnum">${pre?`<span>${pre}</span>`:""}<input ${attrs} type="number" inputmode="decimal" min="0" step="${step||"any"}" value="${val}">${suf?`<span>${suf}</span>`:""}</label>`;
+  const seg=(attr,cur,opts)=>`<div class="pseg">${opts.map(([v,l])=>`<button type="button" ${attr} data-v="${v}" aria-pressed="${cur===v}">${l}</button>`).join("")}</div>`;
+  let h=`<div class="pricing-wrap"><div class="view-head"><h1>Pricing</h1><div class="sub">Your costs → every order prices itself</div></div>`;
+  // live price check
+  h+=`<div class="panel pcheck"><h2>Price check</h2>
+    <div class="pc-pick"><select id="pc-b">${B.map((x,i)=>`<option value="${i}" ${x===pcB?"selected":""}>${esc(x.name)}</option>`).join("")}</select><select id="pc-t">${T.map((x,i)=>`<option value="${i}" ${x===pcT?"selected":""}>${esc(x.name)}</option>`).join("")}</select><label class="pnum sm"><input id="pc-c" type="number" inputmode="numeric" min="1" max="12" value="${pcColors}"><span>colors</span></label></div>
+    <div id="pc-out">${priceCheckHtml(pcB.name,pcT.name,pcColors)}</div></div>`;
+  // rates
+  h+=`<div class="panel"><h2>Your rates</h2>
+    <div class="pfield"><div><b>Labor rate</b><small>What your dye time is worth</small></div>${numIn('id="s-labor"',p.laborRate,"$","/hr","1")}</div>
+    <div class="pfield"><div><b>Markup</b><small>Price = cost × this (2.2 = 120% on top)</small></div>${numIn('id="s-markup"',p.markup,"","×","0.1")}</div>
+    <div class="pfield"><div><b>Round prices up to</b><small>Nearest $0.50, $1…</small></div>${numIn('id="s-round"',p.roundTo,"$","","0.25")}</div></div>`;
+  // blanks
+  h+=`<div class="panel"><h2>Blanks <small class="h2s">what each garment costs you</small></h2><div class="plist">${B.map((x,i)=>`<div class="prow"><input class="pname" data-bt="name" data-bi="${i}" value="${esc(x.name)}" aria-label="Garment name">${numIn(`data-bt="cost" data-bi="${i}" aria-label="Cost"`,x.cost,"$","","0.25")}<button class="pdel" data-brm="${i}" aria-label="Remove ${esc(x.name)}">${del}</button></div>`).join("")}</div><button class="padd" id="addBlank">+ Add garment</button></div>`;
+  // techniques
+  h+=`<div class="panel"><h2>Techniques <small class="h2s">hands-on minutes per piece</small></h2><div class="plist">${T.map((x,i)=>`<div class="prow"><input class="pname" data-tt="name" data-ti="${i}" value="${esc(x.name)}" aria-label="Technique name">${numIn(`data-tt="min" data-ti="${i}" aria-label="Minutes"`,x.min,"","min","1")}<button class="pdel" data-trm="${i}" aria-label="Remove ${esc(x.name)}">${del}</button></div>`).join("")}</div><button class="padd" id="addTech">+ Add technique</button></div>`;
+  // materials
+  h+=`<div class="panel"><h2>Dyes & materials</h2><div class="plist">${M.map((m,i)=>`<div class="prow mat"><div class="mtop"><input class="pname" data-mt="name" data-mi="${i}" value="${esc(m.name)}" aria-label="Material name"><button class="pdel" data-mrm="${i}" aria-label="Remove ${esc(m.name)}">${del}</button></div><div class="mbot">${numIn(`data-mt="cost" data-mi="${i}" aria-label="Cost"`,m.cost,"$","","0.05")}<span class="per">per</span>${seg(`data-mper="${i}"`,m.per,[["piece","Piece"],["color","Color"],["order","Order"]])}</div></div>`).join("")}</div><button class="padd" id="addMat">+ Add dye / material</button><div class="hint">“Per color” is multiplied by the dye colors in each piece. “Per order” is added once per order.</div></div>`;
+  // rush
+  const r=p.rush||{type:"percent",amount:25};
+  h+=`<div class="panel"><h2>Rush orders</h2>${seg('data-rtype=""',r.type,[["percent","% of order"],["flat","Flat fee"],["piece","Per piece"]])}<div class="pfield" style="margin-top:12px"><div><b>Rush charge</b><small>Added when “Rush order” is on</small></div>${numIn('id="s-rush-amt"',r.amount,r.type==="percent"?"":"$",r.type==="percent"?"%":r.type==="piece"?"/pc":"","1")}</div></div>`;
+  // tax
+  h+=`<div class="panel"><h2>Sales tax</h2><div class="pfield"><div><b>Tax rate</b><small>Leave at 0 until you have a vendor's license</small></div>${numIn('id="s-tax"',p.taxRate||0,"","%","0.05")}</div><div class="hint">Use your county's total rate. Tax covers the whole order (pieces, rush, order charges). Wholesale is exempt automatically.</div></div>`;
+  h+=`<div class="psave${prDirty?" show":""}" id="psave"><span>Unsaved changes</span><button class="btn berry" id="savePricing">Save pricing</button></div><div class="psave-pad"></div></div>`;
+  return h;
+}
+function priceCheckHtml(bn,tn,colors){
+  const it={garment:bn,technique:tn,colors:+colors||0,qty:1,price:""};
+  const bc=blankCost(bn),tm=techMin(tn),lr=+S.pricing.laborRate||0,labor=tm/60*lr,mat=matSum("piece"),dye=(+colors||0)*matSum("color"),cost=itemCost(it),sug=suggestP(it);
+  return `<div class="pc-big"><span>Suggested price</span><b class="tnum">${money(sug)}</b><small>${money(sug-cost)} profit per piece</small></div>
+    <div class="pc-rows"><div><span>Blank</span><b>${money(bc)}</b></div><div><span>Labor · ${tm} min</span><b>${money(labor)}</b></div><div><span>Materials</span><b>${money(mat)}</b></div><div><span>Dye · ${+colors||0} colors</span><b>${money(dye)}</b></div><div class="tot"><span>Your cost</span><b>${money(cost)}</b></div><div><span>× ${S.pricing.markup} markup, rounded</span><b>${money(sug)}</b></div></div>`;
 }
 
 /* ─────────── Settings ─────────── */
@@ -546,20 +560,25 @@ function wireInventory(){
   const im=document.getElementById("invImport"); if(im) im.onclick=importBlanks;
 }
 function wirePricing(){
-  const n=(id,k)=>{const el=document.getElementById(id);if(el)el.oninput=()=>S.pricing[k]=num(el.value);};
-  n("s-labor","laborRate");n("s-markup","markup");n("s-round","roundTo");
-  const tr=document.getElementById("s-tax"); if(tr) tr.oninput=()=>{S.pricing.taxRate=num(tr.value);};
-  const rt=document.getElementById("s-rush-type"),ra=document.getElementById("s-rush-amt"); if(rt) rt.onchange=()=>{S.pricing.rush.type=rt.value;document.getElementById("s-rush-unit").textContent=rt.value==="percent"?"Rush %":"Rush $";}; if(ra) ra.oninput=()=>{S.pricing.rush.amount=num(ra.value);};
-  document.querySelectorAll("[data-mt]").forEach(el=>{const i=+el.dataset.mi,f=el.dataset.mt;el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{S.pricing.materials[i][f]=f==="cost"?num(el.value):el.value;});});
-  document.querySelectorAll("[data-mrm]").forEach(b=>b.onclick=()=>{S.pricing.materials.splice(+b.dataset.mrm,1);rerender();});
-  document.querySelectorAll("[data-bt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.bi,f=el.dataset.bt;S.pricing.blanks[i][f]=f==="cost"?num(el.value):el.value;});
-  document.querySelectorAll("[data-brm]").forEach(b=>b.onclick=()=>{S.pricing.blanks.splice(+b.dataset.brm,1);rerender();});
-  document.querySelectorAll("[data-tt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.ti,f=el.dataset.tt;S.pricing.techniques[i][f]=f==="min"?num(el.value):el.value;});
-  document.querySelectorAll("[data-trm]").forEach(b=>b.onclick=()=>{S.pricing.techniques.splice(+b.dataset.trm,1);rerender();});
-  document.getElementById("addMat").onclick=()=>{S.pricing.materials.push({name:"New material",cost:0.25,per:"piece"});rerender();};
-  document.getElementById("addBlank").onclick=()=>{S.pricing.blanks.push({name:"New garment",cost:5});rerender();};
-  document.getElementById("addTech").onclick=()=>{S.pricing.techniques.push({name:"New technique",min:5});rerender();};
-  document.getElementById("savePricing").onclick=savePricing;
+  const dirty=()=>{prDirty=true;const b=document.getElementById("psave");if(b)b.classList.add("show");pcRefresh();};
+  const pcRefresh=()=>{const o=document.getElementById("pc-out");if(!o)return;const B=S.pricing.blanks,T=S.pricing.techniques;o.innerHTML=priceCheckHtml((B[Math.min(pcBlank,B.length-1)]||{}).name,(T[Math.min(pcTech,T.length-1)]||{}).name,pcColors);};
+  const n=(id,set)=>{const el=document.getElementById(id);if(el)el.oninput=()=>{set(num(el.value));dirty();};};
+  n("s-labor",v=>S.pricing.laborRate=v);n("s-markup",v=>S.pricing.markup=v);n("s-round",v=>S.pricing.roundTo=v);n("s-tax",v=>S.pricing.taxRate=v);n("s-rush-amt",v=>S.pricing.rush.amount=v);
+  document.querySelectorAll("[data-bt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.bi,f=el.dataset.bt;S.pricing.blanks[i][f]=f==="cost"?num(el.value):el.value;dirty();});
+  document.querySelectorAll("[data-tt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.ti,f=el.dataset.tt;S.pricing.techniques[i][f]=f==="min"?num(el.value):el.value;dirty();});
+  document.querySelectorAll("[data-mt]").forEach(el=>el.oninput=()=>{const i=+el.dataset.mi,f=el.dataset.mt;S.pricing.materials[i][f]=f==="cost"?num(el.value):el.value;dirty();});
+  document.querySelectorAll("[data-mper]").forEach(b=>b.onclick=()=>{S.pricing.materials[+b.dataset.mper].per=b.dataset.v;b.parentNode.querySelectorAll("button").forEach(x=>x.setAttribute("aria-pressed",x===b));dirty();});
+  document.querySelectorAll("[data-rtype]").forEach(b=>b.onclick=()=>{S.pricing.rush.type=b.dataset.v;prDirty=true;rerender();});
+  const rm=(attr,arr,label)=>document.querySelectorAll(`[${attr}]`).forEach(b=>b.onclick=()=>{const i=+b.getAttribute(attr),list=S.pricing[arr];if(list.length<=1){toast(`Keep at least one ${label}`);return;}list.splice(i,1);prDirty=true;rerender();});
+  rm("data-brm","blanks","garment");rm("data-trm","techniques","technique");
+  document.querySelectorAll("[data-mrm]").forEach(b=>b.onclick=()=>{S.pricing.materials.splice(+b.dataset.mrm,1);prDirty=true;rerender();});
+  const add=(id,fn)=>{const el=document.getElementById(id);if(el)el.onclick=()=>{fn();prDirty=true;rerender();setTimeout(()=>{const ins=el.parentNode.querySelectorAll(".pname");const last=ins[ins.length-1];if(last){last.focus();last.select();}},30);};};
+  add("addBlank",()=>S.pricing.blanks.push({name:"New garment",cost:5}));
+  add("addTech",()=>S.pricing.techniques.push({name:"New technique",min:5}));
+  add("addMat",()=>S.pricing.materials.push({name:"New material",cost:0.25,per:"piece"}));
+  const pb=document.getElementById("pc-b"),pt=document.getElementById("pc-t"),pc=document.getElementById("pc-c");
+  if(pb)pb.onchange=()=>{pcBlank=+pb.value;pcRefresh();}; if(pt)pt.onchange=()=>{pcTech=+pt.value;pcRefresh();}; if(pc)pc.oninput=()=>{pcColors=Math.max(0,num(pc.value));pcRefresh();};
+  document.getElementById("savePricing").onclick=async()=>{await savePricing();prDirty=false;const b=document.getElementById("psave");if(b)b.classList.remove("show");};
 }
 function wireSettings(){
   const saveSet=()=>{S.settings.shop=val("set-shop");S.settings.owner=val("set-owner");S.settings.contact=val("set-contact");S.settings.email=val("set-email");S.settings.payWith=val("set-pay");S.settings.invoiceNote=val("set-foot");savePricing("Saved");};
