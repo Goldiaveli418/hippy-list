@@ -10,7 +10,7 @@ const CFG = window.HIPPY_CONFIG || {};
 const LIVE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase);
 const sb = LIVE ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
 const LS = "hippylist.app.v1";
-const APP_VERSION = "202610182348";
+const APP_VERSION = "202610190001";
 /* Auto-update: phones and home-screen apps cache files, so check for a newer deploy and reload into it. */
 async function checkUpdate(){ try{ const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const {v}=await r.json(); if(v&&v!==APP_VERSION&&!sessionStorage.getItem("hl-upd-"+v)){ sessionStorage.setItem("hl-upd-"+v,"1"); location.replace(location.pathname+"?v="+v); } }catch(e){} }
 checkUpdate(); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") checkUpdate(); });
@@ -124,8 +124,9 @@ async function refetch(t){
   if(t==="orders"){const {data}=await sb.from("orders").select("*").order("created_at",{ascending:false});S.orders=(data||[]).map(rowToOrder);}
   if(t==="customers"){const {data}=await sb.from("customers").select("*").order("name");S.customers=data||[];}
   if(t==="inventory"){const {data}=await sb.from("inventory").select("*").order("name");S.inventory=data||[];}
-  renderApp(); if(openId) renderDrawer();
+  if(isTyping()) return; renderApp(); if(openId) renderDrawer();
 }
+function isTyping(){const a=document.activeElement;return !!(a&&a.matches&&a.matches("input,textarea,select")&&(document.getElementById("view")||{contains:()=>false}).contains(a));}
 function rowToOrder(r){ return {id:r.id,ref:r.ref,status:r.status,customer:r.customer||{},items:r.items||[],deposit:+r.deposit||0,orderCharge:+r.order_charge||0,paid:!!r.paid,photos:r.photos||[],notes:r.notes||"",createdAt:r.created_at}; }
 function orderToRow(o){ return {status:o.status,customer:o.customer,items:o.items,deposit:o.deposit,order_charge:o.orderCharge||0,paid:!!o.paid,photos:o.photos||[],notes:o.notes||""}; }
 
@@ -328,25 +329,25 @@ function renderCustomers(){
 
 /* ─────────── Inventory ─────────── */
 function renderInventory(){
-  const low=S.inventory.filter(x=>(+x.on_hand||0)<=(+x.reorder_at||0));
-  let h=`<div class="view-head"><h1>Inventory</h1><div class="sub">${S.inventory.length} items · ${low.length} low</div><div class="right"><button class="btn sm" id="invImport">Import blanks from Pricing</button><button class="btn berry sm" id="invAdd">+ Add item</button></div></div>`;
-  if(low.length) h+=`<div class="banner warn"><b>${low.length} item${low.length>1?"s":""} low:</b> ${low.map(x=>esc(x.name)).join(", ")}. Time to reorder.</div>`;
-  ["blank","material"].forEach(kind=>{
+  const low=S.inventory.filter(x=>(+x.on_hand||0)<=(+x.reorder_at||0)&&(+x.reorder_at||0)>0);
+  const del=`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>`;
+  let h=`<div class="pricing-wrap"><div class="view-head"><h1>Inventory</h1><div class="sub">${S.inventory.length} item${S.inventory.length===1?"":"s"}${low.length?` · <span class="low">${low.length} low</span>`:""}</div></div>`;
+  h+=`<div id="invLow">${lowBanner(low)}</div>`;
+  [["blank","Blanks","+ Add blank"],["material","Dyes & materials","+ Add dye / material"]].forEach(([kind,title,addL])=>{
     const items=S.inventory.filter(x=>x.kind===kind);
-    if(!items.length) return;
-    h+=`<div class="panel" style="padding:0;margin-bottom:16px"><div style="padding:14px 18px 0"><h2 style="margin:0">${kind==="blank"?"Blanks":"Dyes & materials"}</h2></div>
-      <div class="tablewrap"><table class="data"><thead><tr><th>Item</th><th>On hand</th><th>Reorder at</th><th>Unit</th><th></th></tr></thead><tbody>`;
-    items.forEach(x=>{const lowf=(+x.on_hand||0)<=(+x.reorder_at||0);h+=`<tr>
-      <td class="nm">${esc(x.name)}</td>
-      <td><span class="stepper"><button data-adj="${x.id}" data-d="-1">−</button><span class="${lowf?"low":""}">${x.on_hand}</span><button data-adj="${x.id}" data-d="1">+</button></span></td>
-      <td><input class="tnum" style="width:64px;text-align:right;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px" data-reorder="${x.id}" type="number" value="${x.reorder_at}"></td>
-      <td class="muted">${esc(x.unit||"ea")}</td>
-      <td style="text-align:right"><button class="btn sm ghost danger" data-invrm="${x.id}">✕</button></td></tr>`;});
-    h+=`</tbody></table></div></div>`;
+    h+=`<div class="panel"><h2>${title}</h2><div class="plist">${items.map(x=>{const lw=(+x.on_hand||0)<=(+x.reorder_at||0)&&(+x.reorder_at||0)>0;return `<div class="icard${lw?" is-low":""}" data-inv="${x.id}">
+      <div class="mtop"><input class="pname" data-ifield="name" value="${esc(x.name)}" aria-label="Item name" enterkeyhint="next"><button class="pdel" data-invrm="${x.id}" aria-label="Remove ${esc(x.name)}">${del}</button></div>
+      <div class="ibot">
+        <div class="istep"><button type="button" data-adj="-1" aria-label="One less">−</button><input data-ifield="on_hand" type="number" inputmode="numeric" pattern="[0-9]*" min="0" value="${+x.on_hand||0}" aria-label="On hand" enterkeyhint="done"><button type="button" data-adj="1" aria-label="One more">+</button></div>
+        <input class="iunit" data-ifield="unit" value="${esc(x.unit||"ea")}" aria-label="Unit">
+        <label class="pnum ire"><span>reorder at</span><input data-ifield="reorder_at" type="number" inputmode="numeric" pattern="[0-9]*" min="0" value="${+x.reorder_at||0}"></label>
+        <span class="lowtag">Low</span>
+      </div></div>`;}).join("")}</div>
+      <button class="padd" data-invadd="${kind}">${addL}</button>${kind==="blank"&&S.pricing.blanks.some(b=>!S.inventory.find(i=>i.name===b.name))?`<button class="linkbtn" id="invImport" style="margin-top:10px">Add all garments from Pricing</button>`:""}</div>`;
   });
-  if(!S.inventory.length) h+=emptyState("No inventory tracked","Add blanks and dyes to watch your stock.");
-  return h;
+  return h+`</div>`;
 }
+function lowBanner(low){return low.length?`<div class="banner warn"><b>${low.length} item${low.length>1?"s":""} low:</b> ${low.map(x=>esc(x.name)).join(", ")}. Time to reorder.</div>`:"";}
 
 
 /* ─────────── Reports ─────────── */
@@ -553,10 +554,20 @@ function soft(){
   const cr=document.getElementById("sum-chg-row");if(cr)cr.style.display=chg>0?"":"none";
 }
 function wireInventory(){
-  document.querySelectorAll("[data-adj]").forEach(b=>b.onclick=()=>adjInv(b.dataset.adj,+b.dataset.d));
-  document.querySelectorAll("[data-reorder]").forEach(el=>el.onchange=()=>setInv(el.dataset.reorder,{reorder_at:num(el.value)}));
+  document.querySelectorAll(".icard").forEach(card=>{
+    const id=card.dataset.inv, x=S.inventory.find(i=>i.id===id); if(!x) return;
+    const qty=card.querySelector('[data-ifield="on_hand"]');
+    const touch=()=>{const lw=(+x.on_hand||0)<=(+x.reorder_at||0)&&(+x.reorder_at||0)>0;card.classList.toggle("is-low",lw);const lowAll=S.inventory.filter(i=>(+i.on_hand||0)<=(+i.reorder_at||0)&&(+i.reorder_at||0)>0);const lb=document.getElementById("invLow");if(lb)lb.innerHTML=lowBanner(lowAll);};
+    card.querySelectorAll("[data-ifield]").forEach(el=>{
+      const f=el.dataset.ifield, isNum=el.type==="number";
+      if(isNum){ el.addEventListener("focus",()=>{ if(el.value==="0") el.value=""; el.addEventListener("mouseup",e=>e.preventDefault(),{once:true}); setTimeout(()=>{try{el.select();}catch(e){}},0); }); el.addEventListener("blur",()=>{ if(el.value==="") el.value=x[f]||0; }); }
+      el.oninput=()=>{x[f]=isNum?Math.max(0,Math.floor(num(el.value))):el.value;saveInvSoon(id,{[f]:x[f]});touch();};
+      el.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();if(f==="name")qty.focus();else el.blur();}};
+    });
+    card.querySelectorAll("[data-adj]").forEach(b=>b.onclick=()=>{x.on_hand=Math.max(0,(+x.on_hand||0)+(+b.dataset.adj));qty.value=x.on_hand;saveInvSoon(id,{on_hand:x.on_hand});touch();});
+  });
   document.querySelectorAll("[data-invrm]").forEach(b=>b.onclick=()=>rmInv(b.dataset.invrm));
-  const a=document.getElementById("invAdd"); if(a) a.onclick=addInv;
+  document.querySelectorAll("[data-invadd]").forEach(b=>b.onclick=()=>addInv(b.dataset.invadd));
   const im=document.getElementById("invImport"); if(im) im.onclick=importBlanks;
 }
 function wirePricing(){
@@ -625,7 +636,12 @@ async function savePricing(msg){ S.pricing.settings=S.settings; if(LIVE){try{con
 /* inventory ops */
 async function adjInv(id,d){const x=S.inventory.find(i=>i.id===id);if(!x)return;x.on_hand=Math.max(0,(+x.on_hand||0)+d);await setInv(id,{on_hand:x.on_hand});}
 async function setInv(id,patch){const x=S.inventory.find(i=>i.id===id);if(x)Object.assign(x,patch);if(LIVE){await sb.from("inventory").update(patch).eq("id",id);}else saveLocal();rerender();}
-function addInv(){ const x={id:uid(),kind:"blank",name:"New blank",on_hand:0,reorder_at:0,unit:"ea"}; if(LIVE){sb.from("inventory").insert({kind:x.kind,name:x.name,on_hand:0,reorder_at:0,unit:"ea"}).then(()=>refetch("inventory"));}else{S.inventory.push(x);saveLocal();rerender();} }
+const invTimers={}, invPending={};
+function saveInvSoon(id,patch){ invPending[id]=Object.assign(invPending[id]||{},patch); clearTimeout(invTimers[id]); invTimers[id]=setTimeout(async()=>{const p=invPending[id];delete invPending[id]; if(LIVE){try{await sb.from("inventory").update(p).eq("id",id);}catch(e){toast("Couldn't save — check connection");}} else saveLocal();},450); }
+async function addInv(kind){ kind=kind==="material"?"material":"blank"; const row={kind,name:"",on_hand:0,reorder_at:0,unit:kind==="blank"?"ea":"jars"}; let x={id:uid(),...row};
+  if(LIVE){ try{ const {data,error}=await sb.from("inventory").insert(row).select().single(); if(error) throw error; x=data; }catch(e){ toast("Couldn't add — check connection"); return; } }
+  S.inventory.push(x); if(!LIVE) saveLocal(); rerender();
+  const el=document.querySelector(`.icard[data-inv="${x.id}"] [data-ifield="name"]`); if(el){ el.placeholder=kind==="blank"?"Garment name":"Dye or material"; el.focus(); el.scrollIntoView({block:"center",behavior:"smooth"}); } }
 async function rmInv(id){S.inventory=S.inventory.filter(i=>i.id!==id);if(LIVE){await sb.from("inventory").delete().eq("id",id);}else saveLocal();rerender();}
 function importBlanks(){ const names=new Set(S.inventory.map(i=>i.name)); const add=S.pricing.blanks.filter(b=>!names.has(b.name)).map(b=>({id:uid(),kind:"blank",name:b.name,on_hand:0,reorder_at:0,unit:"ea"})); if(!add.length){toast("Already imported");return;} if(LIVE){sb.from("inventory").insert(add.map(a=>({kind:"blank",name:a.name,on_hand:0,reorder_at:0,unit:"ea"}))).then(()=>refetch("inventory"));}else{S.inventory.push(...add);saveLocal();rerender();} toast(add.length+" blanks added"); }
 
