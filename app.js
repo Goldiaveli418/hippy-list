@@ -10,6 +10,10 @@ const CFG = window.HIPPY_CONFIG || {};
 const LIVE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase);
 const sb = LIVE ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
 const LS = "hippylist.app.v1";
+const APP_VERSION = "202610182337";
+/* Auto-update: phones and home-screen apps cache files, so check for a newer deploy and reload into it. */
+async function checkUpdate(){ try{ const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const {v}=await r.json(); if(v&&v!==APP_VERSION&&!sessionStorage.getItem("hl-upd-"+v)){ sessionStorage.setItem("hl-upd-"+v,"1"); location.replace(location.pathname+"?v="+v); } }catch(e){} }
+checkUpdate(); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") checkUpdate(); });
 
 /* ─────────── Domain ─────────── */
 const STAGES = [
