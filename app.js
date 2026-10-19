@@ -10,7 +10,7 @@ const CFG = window.HIPPY_CONFIG || {};
 const LIVE = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase);
 const sb = LIVE ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null;
 const LS = "hippylist.app.v1";
-const APP_VERSION = "202610190001";
+const APP_VERSION = "202610190016";
 /* Auto-update: phones and home-screen apps cache files, so check for a newer deploy and reload into it. */
 async function checkUpdate(){ try{ const r=await fetch("version.json?t="+Date.now(),{cache:"no-store"}); if(!r.ok) return; const {v}=await r.json(); if(v&&v!==APP_VERSION&&!sessionStorage.getItem("hl-upd-"+v)){ sessionStorage.setItem("hl-upd-"+v,"1"); location.replace(location.pathname+"?v="+v); } }catch(e){} }
 checkUpdate(); document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") checkUpdate(); });
@@ -109,6 +109,7 @@ async function loadLive(){
     S.inventory=i.data||[];
     S.pricing=p.data&&p.data.data?normalizePricing(p.data.data):clone(DEFAULT_PRICING);
     if(S.pricing.settings) S.settings=Object.assign(S.settings,S.pricing.settings);
+    await reconcileLists();
     subscribeLive();
   }catch(e){ toast("Couldn't load — check connection"); }
   renderApp();
@@ -132,8 +133,8 @@ function orderToRow(o){ return {status:o.status,customer:o.customer,items:o.item
 
 /* ─────────── Data: local ─────────── */
 function loadLocal(){
-  try{ const raw=localStorage.getItem(LS); if(raw){ const d=JSON.parse(raw); S=Object.assign(S,d); S.pricing=normalizePricing(S.pricing); return; } }catch(e){}
-  S=seed();
+  try{ const raw=localStorage.getItem(LS); if(raw){ const d=JSON.parse(raw); S=Object.assign(S,d); S.pricing=normalizePricing(S.pricing); reconcileLists(); return; } }catch(e){}
+  S=seed(); S.pricing=normalizePricing(S.pricing); reconcileLists();
 }
 function saveLocal(){ if(LIVE) return; try{ localStorage.setItem(LS,JSON.stringify(S)); }catch(e){} }
 
@@ -283,7 +284,7 @@ function lineItem(it,i){
   const sug=suggestP(it),manual=!(it.price===""||it.price==null);
   return `<div class="lineitem" data-i="${i}">
     <div class="li-grid">
-      <label class="fld">Garment<select class="inp" data-f="garment" data-i="${i}">${S.pricing.blanks.map(b=>`<option ${b.name===it.garment?"selected":""}>${esc(b.name)}</option>`).join("")}</select></label>
+      <label class="fld">Garment<select class="inp" data-f="garment" data-i="${i}">${S.pricing.blanks.map(b=>{const inv=S.inventory.find(i=>i.kind==="blank"&&i.name===b.name);return `<option value="${esc(b.name)}" ${b.name===it.garment?"selected":""}>${esc(b.name)}${inv?` · ${+inv.on_hand||0} in stock`:""}</option>`;}).join("")}</select></label>
       <label class="fld">Technique<select class="inp" data-f="technique" data-i="${i}">${S.pricing.techniques.map(x=>`<option ${x.name===it.technique?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>
       <label class="fld">Qty<input class="inp tnum" type="number" min="1" step="1" data-f="qty" data-i="${i}" value="${it.qty}"></label>
     </div>
@@ -343,7 +344,7 @@ function renderInventory(){
         <label class="pnum ire"><span>reorder at</span><input data-ifield="reorder_at" type="number" inputmode="numeric" pattern="[0-9]*" min="0" value="${+x.reorder_at||0}"></label>
         <span class="lowtag">Low</span>
       </div></div>`;}).join("")}</div>
-      <button class="padd" data-invadd="${kind}">${addL}</button>${kind==="blank"&&S.pricing.blanks.some(b=>!S.inventory.find(i=>i.name===b.name))?`<button class="linkbtn" id="invImport" style="margin-top:10px">Add all garments from Pricing</button>`:""}</div>`;
+      <button class="padd" data-invadd="${kind}">${addL}</button></div>`;
   });
   return h+`</div>`;
 }
@@ -439,7 +440,7 @@ function renderPricing(){
     <div class="pfield"><div><b>Markup</b><small>Price = cost × this (2.2 = 120% on top)</small></div>${numIn('id="s-markup"',p.markup,"","×","0.1")}</div>
     <div class="pfield"><div><b>Round prices up to</b><small>Nearest $0.50, $1…</small></div>${numIn('id="s-round"',p.roundTo,"$","","0.25")}</div></div>`;
   // blanks
-  h+=`<div class="panel"><h2>Blanks <small class="h2s">what each garment costs you</small></h2><div class="plist">${B.map((x,i)=>`<div class="prow"><input class="pname" data-bt="name" data-bi="${i}" value="${esc(x.name)}" aria-label="Garment name">${numIn(`data-bt="cost" data-bi="${i}" aria-label="Cost"`,x.cost,"$","","0.25")}<button class="pdel" data-brm="${i}" aria-label="Remove ${esc(x.name)}">${del}</button></div>`).join("")}</div><button class="padd" id="addBlank">+ Add garment</button></div>`;
+  h+=`${(()=>{const n=B.filter(x=>!(+x.cost>0)).length+M.filter(x=>!(+x.cost>0)).length;return n?`<div class="banner warn"><b>${n} item${n>1?"s":""} need a cost.</b> Fill in the boxes outlined in gold so prices come out right.</div>`:"";})()}<div class="panel"><h2>Blanks <small class="h2s">what each garment costs you</small></h2><div class="plist">${B.map((x,i)=>`<div class="prow"><input class="pname" data-bt="name" data-bi="${i}" value="${esc(x.name)}" aria-label="Garment name">${numIn(`data-bt="cost" data-bi="${i}" aria-label="Cost"`,x.cost,"$","","0.25")}<button class="pdel" data-brm="${i}" aria-label="Remove ${esc(x.name)}">${del}</button></div>`).join("")}</div><button class="padd" id="addBlank">+ Add garment</button></div>`;
   // techniques
   h+=`<div class="panel"><h2>Techniques <small class="h2s">hands-on minutes per piece</small></h2><div class="plist">${T.map((x,i)=>`<div class="prow"><input class="pname" data-tt="name" data-ti="${i}" value="${esc(x.name)}" aria-label="Technique name">${numIn(`data-tt="min" data-ti="${i}" aria-label="Minutes"`,x.min,"","min","1")}<button class="pdel" data-trm="${i}" aria-label="Remove ${esc(x.name)}">${del}</button></div>`).join("")}</div><button class="padd" id="addTech">+ Add technique</button></div>`;
   // materials
@@ -563,12 +564,12 @@ function wireInventory(){
       if(isNum){ el.addEventListener("focus",()=>{ if(el.value==="0") el.value=""; el.addEventListener("mouseup",e=>e.preventDefault(),{once:true}); setTimeout(()=>{try{el.select();}catch(e){}},0); }); el.addEventListener("blur",()=>{ if(el.value==="") el.value=x[f]||0; }); }
       el.oninput=()=>{x[f]=isNum?Math.max(0,Math.floor(num(el.value))):el.value;saveInvSoon(id,{[f]:x[f]});touch();};
       el.onkeydown=e=>{if(e.key==="Enter"){e.preventDefault();if(f==="name")qty.focus();else el.blur();}};
+      if(f==="name"){ el.addEventListener("focus",()=>{el.dataset.old=x.name||"";}); el.addEventListener("change",()=>pricingFromInv(x.kind,el.dataset.old,el.value).then(()=>{el.dataset.old=x.name;})); }
     });
     card.querySelectorAll("[data-adj]").forEach(b=>b.onclick=()=>{x.on_hand=Math.max(0,(+x.on_hand||0)+(+b.dataset.adj));qty.value=x.on_hand;saveInvSoon(id,{on_hand:x.on_hand});touch();});
   });
   document.querySelectorAll("[data-invrm]").forEach(b=>b.onclick=()=>rmInv(b.dataset.invrm));
   document.querySelectorAll("[data-invadd]").forEach(b=>b.onclick=()=>addInv(b.dataset.invadd));
-  const im=document.getElementById("invImport"); if(im) im.onclick=importBlanks;
 }
 function wirePricing(){
   const dirty=()=>{prDirty=true;const b=document.getElementById("psave");if(b)b.classList.add("show");pcRefresh();};
@@ -583,7 +584,7 @@ function wirePricing(){
   const rm=(attr,arr,label)=>document.querySelectorAll(`[${attr}]`).forEach(b=>b.onclick=()=>{const i=+b.getAttribute(attr),list=S.pricing[arr];if(list.length<=1){toast(`Keep at least one ${label}`);return;}list.splice(i,1);prDirty=true;rerender();});
   rm("data-brm","blanks","garment");rm("data-trm","techniques","technique");
   document.querySelectorAll("[data-mrm]").forEach(b=>b.onclick=()=>{S.pricing.materials.splice(+b.dataset.mrm,1);prDirty=true;rerender();});
-  const add=(id,fn)=>{const el=document.getElementById(id);if(el)el.onclick=()=>{fn();prDirty=true;rerender();setTimeout(()=>{const ins=el.parentNode.querySelectorAll(".pname");const last=ins[ins.length-1];if(last){last.focus();last.select();}},30);};};
+  const add=(id,fn)=>{const el=document.getElementById(id);if(el)el.onclick=()=>{fn();prDirty=true;rerender();const b=document.getElementById("psave");if(b)b.classList.add("show");const fresh=document.getElementById(id);const ins=fresh?fresh.parentNode.querySelectorAll(".pname"):[];const last=ins[ins.length-1];if(last){last.focus();last.select();last.scrollIntoView({block:"center",behavior:"smooth"});}};};
   add("addBlank",()=>S.pricing.blanks.push({name:"New garment",cost:5}));
   add("addTech",()=>S.pricing.techniques.push({name:"New technique",min:5}));
   add("addMat",()=>S.pricing.materials.push({name:"New material",cost:0.25,per:"piece"}));
@@ -631,7 +632,33 @@ async function ensureCustomer(cust){
   const rec={id:uid(),name:cust.name,phone:cust.phone||"",email:cust.email||"",kind:cust.kind||"retail",notes:""};
   if(LIVE){try{await sb.from("customers").insert({name:rec.name,phone:rec.phone,email:rec.email,kind:rec.kind});}catch(e){}} else {S.customers.push(rec);saveLocal();}
 }
-async function savePricing(msg){ S.pricing.settings=S.settings; if(LIVE){try{const r=await sb.from("pricing").upsert({user_id:session.user.id,data:S.pricing});if(r.error)throw r.error;}catch(e){toast("Couldn't save");return;}} else saveLocal(); toast(typeof msg==="string"?msg:"Pricing saved"); }
+async function persistPricing(){ S.pricing.settings=S.settings; if(LIVE){const r=await sb.from("pricing").upsert({user_id:session.user.id,data:S.pricing});if(r.error)throw r.error;} else saveLocal(); }
+async function savePricing(msg){ try{ await persistPricing(); }catch(e){ toast("Couldn't save"); return; } await syncInvFromPricing(); if(!LIVE) saveLocal(); toast(typeof msg==="string"?msg:"Pricing saved"); }
+/* One list everywhere: Inventory blanks ↔ Pricing blanks ↔ order garment menu, Inventory materials ↔ Pricing materials. Matched by name. */
+let prSnap={blank:{},material:{}};
+function prList(kind){return kind==="material"?(S.pricing.materials||(S.pricing.materials=[])):S.pricing.blanks;}
+function snapPricing(){prSnap={blank:{},material:{}};["blank","material"].forEach(k=>prList(k).forEach(x=>{prSnap[k][x.id]=x.name;}));}
+async function invCreate(kind,name){ if(!name||S.inventory.some(i=>i.kind===kind&&i.name===name))return; const row={kind,name,on_hand:0,reorder_at:0,unit:kind==="blank"?"ea":"jars"}; if(LIVE){try{const {data}=await sb.from("inventory").insert(row).select().single();if(data&&!S.inventory.some(i=>i.id===data.id))S.inventory.push(data);}catch(e){}} else S.inventory.push({id:uid(),...row}); }
+async function invRename(kind,oldN,newN){ const x=S.inventory.find(i=>i.kind===kind&&i.name===oldN); if(!x) return invCreate(kind,newN); x.name=newN; if(LIVE){try{await sb.from("inventory").update({name:newN}).eq("id",x.id);}catch(e){}} }
+async function invDelete(kind,name){ const x=S.inventory.find(i=>i.kind===kind&&i.name===name); if(!x)return; S.inventory=S.inventory.filter(i=>i!==x); if(LIVE){try{await sb.from("inventory").delete().eq("id",x.id);}catch(e){}} }
+async function syncInvFromPricing(){
+  for(const k of ["blank","material"]){ const list=prList(k), seen=new Set();
+    for(const x of list){ const nm=(x.name||"").trim(); seen.add(x.id); if(!nm) continue; const old=prSnap[k][x.id]; if(old===undefined) await invCreate(k,nm); else if(old!==nm) await invRename(k,old,nm); }
+    for(const id of Object.keys(prSnap[k])) if(!seen.has(id)) await invDelete(k,prSnap[k][id]); }
+  snapPricing();
+}
+async function reconcileLists(){
+  let changed=false;
+  for(const k of ["blank","material"]){ const list=prList(k);
+    for(const i of S.inventory.filter(i=>i.kind===k&&(i.name||"").trim())) if(!list.some(x=>x.name===i.name)){ list.push(k==="blank"?{id:uid(),name:i.name,cost:0}:{id:uid(),name:i.name,cost:0,per:"piece"}); changed=true; }
+    for(const x of list) if((x.name||"").trim()&&!S.inventory.some(i=>i.kind===k&&i.name===x.name)) await invCreate(k,x.name); }
+  snapPricing(); if(changed){ try{ await persistPricing(); }catch(e){} } if(!LIVE) saveLocal();
+}
+async function pricingFromInv(kind,oldN,newN){ const list=prList(kind); newN=(newN||"").trim(); if(!newN) return;
+  const hit=oldN?list.find(x=>x.name===oldN):null;
+  if(hit) hit.name=newN; else if(!list.some(x=>x.name===newN)){ list.push(kind==="blank"?{id:uid(),name:newN,cost:0}:{id:uid(),name:newN,cost:0,per:"piece"}); toast(`Added “${newN}” to Pricing and orders — set its cost in Pricing`); }
+  snapPricing(); try{ await persistPricing(); }catch(e){} }
+
 
 /* inventory ops */
 async function adjInv(id,d){const x=S.inventory.find(i=>i.id===id);if(!x)return;x.on_hand=Math.max(0,(+x.on_hand||0)+d);await setInv(id,{on_hand:x.on_hand});}
@@ -642,7 +669,7 @@ async function addInv(kind){ kind=kind==="material"?"material":"blank"; const ro
   if(LIVE){ try{ const {data,error}=await sb.from("inventory").insert(row).select().single(); if(error) throw error; x=data; }catch(e){ toast("Couldn't add — check connection"); return; } }
   S.inventory.push(x); if(!LIVE) saveLocal(); rerender();
   const el=document.querySelector(`.icard[data-inv="${x.id}"] [data-ifield="name"]`); if(el){ el.placeholder=kind==="blank"?"Garment name":"Dye or material"; el.focus(); el.scrollIntoView({block:"center",behavior:"smooth"}); } }
-async function rmInv(id){S.inventory=S.inventory.filter(i=>i.id!==id);if(LIVE){await sb.from("inventory").delete().eq("id",id);}else saveLocal();rerender();}
+async function rmInv(id){const gone=S.inventory.find(i=>i.id===id); if(gone&&(gone.name||"").trim()){const list=prList(gone.kind),j=list.findIndex(x=>x.name===gone.name); if(j>=0){ if(gone.kind==="blank"&&list.length<=1){toast("Keep at least one garment");return;} list.splice(j,1); snapPricing(); try{await persistPricing();}catch(e){} }} S.inventory=S.inventory.filter(i=>i.id!==id);if(LIVE){await sb.from("inventory").delete().eq("id",id);}else saveLocal();rerender();}
 function importBlanks(){ const names=new Set(S.inventory.map(i=>i.name)); const add=S.pricing.blanks.filter(b=>!names.has(b.name)).map(b=>({id:uid(),kind:"blank",name:b.name,on_hand:0,reorder_at:0,unit:"ea"})); if(!add.length){toast("Already imported");return;} if(LIVE){sb.from("inventory").insert(add.map(a=>({kind:"blank",name:a.name,on_hand:0,reorder_at:0,unit:"ea"}))).then(()=>refetch("inventory"));}else{S.inventory.push(...add);saveLocal();rerender();} toast(add.length+" blanks added"); }
 
 /* ─────────── Drawer ─────────── */
@@ -824,7 +851,7 @@ function nextRef(){return Math.max(1000,...S.orders.map(o=>+o.ref||0))+1;}
 function clone(o){return JSON.parse(JSON.stringify(o));}
 function num(v){const n=parseFloat(v);return isNaN(n)?0:n;}
 function uid(){return "x"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
-function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});if(!o.rush||typeof o.rush!=="object")o.rush=clone(DEFAULT_PRICING.rush);if(o.taxRate==null)o.taxRate=0;if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
+function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});["blanks","materials","techniques"].forEach(k=>(o[k]||[]).forEach(x=>{if(x&&!x.id)x.id=uid();}));if(!o.rush||typeof o.rush!=="object")o.rush=clone(DEFAULT_PRICING.rush);if(o.taxRate==null)o.taxRate=0;if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
 function money(n){n=+n||0;return "$"+n.toLocaleString("en-US",{minimumFractionDigits:(n%1?2:0),maximumFractionDigits:2});}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function csv(s){s=String(s==null?"":s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}

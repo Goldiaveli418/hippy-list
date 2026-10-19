@@ -372,3 +372,4 @@ table.data .nm{font-family:var(--display);font-weight:600;font-size:15.5px}
 /* iPhone zooms into any text box under 16px — keep every field at 16px+ on phones */
 @media (max-width:720px){ input,select,textarea,.pnum input,.pname,.pc-pick select,.iunit{font-size:16px!important} }
 button,a,input{-webkit-tap-highlight-color:transparent}
+.plist .pnum:has(input[data-bt="cost"][value="0"]),.plist .pnum:has(input[data-mt="cost"][value="0"]){border-color:#e0a318;box-shadow:0 0 0 2px #fdf4dc}
