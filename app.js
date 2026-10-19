@@ -389,7 +389,7 @@ function renderSettings(){
     <button class="btn" id="exportOrders2">Export orders CSV</button>
     <button class="btn" id="exportCust">Export customers CSV</button></div>
     <div class="hint">Your data is yours — export anytime.</div></div>
-  ${LIVE?`<div class="panel"><h2>Account</h2><div class="muted" style="margin-bottom:12px">Signed in${session&&session.user?` as ${esc(session.user.email||"")}`:""}.</div><button class="btn danger" id="signout">Sign out</button></div>`:`<div class="panel"><h2>Account</h2><div class="muted">Running in local demo mode. Connect Supabase to enable accounts & sync.</div></div>`}`;
+  ${LIVE?`<div class="panel"><h2>Account</h2><div class="muted" style="margin-bottom:12px">Signed in${session&&session.user?` as ${esc(session.user.email||"")}`:""}.</div><div class="grid2"><label class="fld">Set password<input class="inp" id="set-pw" type="password" autocomplete="new-password" placeholder="At least 8 characters"></label><label class="fld">Type it again<input class="inp" id="set-pw2" type="password" autocomplete="new-password"></label></div><div class="hint">Lets you sign in from the home-screen app without an email link.</div><div class="save-row"><button class="btn berry" id="savePw">Save password</button><button class="btn danger" id="signout">Sign out</button></div></div>`:`<div class="panel"><h2>Account</h2><div class="muted">Running in local demo mode. Connect Supabase to enable accounts & sync.</div></div>`}`;
 }
 
 /* ─────────── Login ─────────── */
@@ -397,16 +397,29 @@ function renderLogin(){
   root().innerHTML=`<div class="login"><div class="login-card">
     <canvas id="spiral" width="112" height="112" style="width:56px;height:56px"></canvas>
     <div class="est">Est. handmade</div><div class="word">Hippy <em>List</em></div>
-    <p>Sign in to your shop. We'll email you a magic link — no password.</p>
-    <input id="authEmail" type="email" placeholder="you@email.com" value="${esc(authEmail)}" autocomplete="email">
-    <button class="btn berry block" id="sendLink">Send magic link</button>
+    <p>Sign in to your shop.</p>
+    <input id="authEmail" type="email" placeholder="you@email.com" value="${esc(authEmail)}" autocomplete="username" inputmode="email">
+    <input id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="btn berry block" id="signIn">Sign in</button>
+    <button class="linkbtn" id="sendLink" style="margin-top:14px">No password yet? Email me a sign-in link</button>
     <div class="hint" id="authMsg"></div>
   </div></div>`;
   drawSpiral();
-  const inp=document.getElementById("authEmail"), btn=document.getElementById("sendLink");
+  const inp=document.getElementById("authEmail"), pw=document.getElementById("authPass"), sbtn=document.getElementById("signIn"), lbtn=document.getElementById("sendLink"), msg=document.getElementById("authMsg");
   inp.oninput=()=>authEmail=inp.value;
-  btn.onclick=async()=>{ if(!authEmail.includes("@")){toast("Enter your email");return;} btn.disabled=true; btn.textContent="Sending…";
-    try{ await sb.auth.signInWithOtp({email:authEmail,options:{emailRedirectTo:location.href}}); document.getElementById("authMsg").textContent="Check your email for the link.";}catch(e){toast("Couldn't send — try again");} btn.disabled=false; btn.textContent="Send magic link"; };
+  const net=m=>m.includes("fetch")||m.includes("network");
+  const signIn=async()=>{ if(!authEmail.includes("@")){toast("Enter your email");return;} if(!pw.value){toast("Enter your password");return;}
+    sbtn.disabled=true; sbtn.textContent="Signing in…"; msg.textContent="";
+    try{ const {error}=await sb.auth.signInWithPassword({email:authEmail.trim(),password:pw.value});
+      if(error){ const m=(error.message||"").toLowerCase(); msg.textContent=net(m)?"Couldn't reach the server — check your connection.":m.includes("invalid")?"Wrong email or password. No password yet? Use the link below.":"Couldn't sign in: "+error.message; }
+    }catch(e){ msg.textContent="Couldn't reach the server — check your connection."; } sbtn.disabled=false; sbtn.textContent="Sign in"; };
+  sbtn.onclick=signIn; pw.onkeydown=e=>{if(e.key==="Enter")signIn();}; inp.onkeydown=e=>{if(e.key==="Enter")pw.focus();};
+  lbtn.onclick=async()=>{ if(!authEmail.includes("@")){toast("Enter your email first");return;} lbtn.disabled=true; msg.textContent="Sending…";
+    try{ const {error}=await sb.auth.signInWithOtp({email:authEmail.trim(),options:{emailRedirectTo:location.origin+location.pathname,shouldCreateUser:false}});
+      if(error){ const m=(error.message||"").toLowerCase();
+        msg.textContent=net(m)?"Couldn't reach the server — check your connection.":m.includes("rate")?"Too many links sent — wait about an hour, then try again.":(m.includes("signup")||m.includes("not found")||m.includes("not allowed"))?"That email isn't on this shop. Use the email you signed up with.":"Couldn't send: "+error.message; }
+      else msg.textContent="Link sent. On iPhone it opens in Safari — sign in there, then go to Settings → Set password. After that, the home-screen app signs in with your password.";
+    }catch(e){ msg.textContent="Couldn't reach the server — check your connection."; } lbtn.disabled=false; };
 }
 
 /* ─────────── Wiring ─────────── */
@@ -474,6 +487,7 @@ function wireSettings(){
   const e1=document.getElementById("exportOrders2"); if(e1) e1.onclick=exportOrders;
   const e2=document.getElementById("exportCust"); if(e2) e2.onclick=exportCustomers;
   const so=document.getElementById("signout"); if(so) so.onclick=async()=>{await sb.auth.signOut();};
+  const sp=document.getElementById("savePw"); if(sp) sp.onclick=async()=>{const a=val("set-pw"),b=val("set-pw2"); if(a.length<8){toast("Use at least 8 characters");return;} if(a!==b){toast("Passwords don't match");return;} sp.disabled=true; try{const {error}=await sb.auth.updateUser({password:a}); if(error){toast(/weak|short|least/i.test(error.message)?"Pick a longer password":"Couldn't save: "+error.message);} else {toast("Password saved ✌");document.getElementById("set-pw").value="";document.getElementById("set-pw2").value="";}}catch(e){toast("Couldn't reach the server");} sp.disabled=false;};
 }
 
 /* ─────────── Writes ─────────── */
