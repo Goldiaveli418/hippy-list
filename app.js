@@ -1,7 +1,7 @@
 /* Hippy List — tie-dye order shop. Standalone web app.
    Backend: Supabase (auth + Postgres + storage) when config.js is filled;
    otherwise a local demo mode (localStorage) so it runs anywhere.
-   Sections: Board · Orders · Customers · Inventory · Money · Pricing. */
+   Sections: Board · Orders · Customers · Inventory · Reports · Pricing. */
 (function(){
 "use strict";
 
@@ -27,6 +27,7 @@ const stageIdx = k => Math.max(0,STAGES.findIndex(s=>s.key===k));
 const DEFAULT_PRICING = {
   laborRate:25, markup:2.2, roundTo:0.5,
   rush:{type:"percent",amount:25},
+  taxRate:0,
   materials:[
     {name:"Fiber-reactive dye",cost:0.60,per:"color"},
     {name:"Soda ash soak",cost:0.25,per:"piece"},
@@ -144,7 +145,10 @@ function orderSubtotal(o){return (o.items||[]).reduce((s,it)=>s+itemUnit(it)*(+i
 function rushLive(o){const r=S.pricing.rush||{},a=+r.amount||0;if(a<=0)return 0;if(r.type==="flat")return a;if(r.type==="piece")return a*orderPieces(o);return roundP(orderSubtotal(o)*a/100);}
 function rushOf(o){const c=o.customer||{};if(!c.rush)return 0;return c.rushFee!=null?+c.rushFee||0:rushLive(o);}
 function rushLabel(){const r=S.pricing.rush||{},a=+r.amount||0;return r.type==="flat"?`+${money(a)}`:r.type==="piece"?`+${money(a)}/pc`:`+${a}%`;}
-function orderTotal(o){const c=(o.orderCharge!=null)?+o.orderCharge||0:orderChargeLive();return orderSubtotal(o)+c+rushOf(o);}
+function taxExempt(o){const c=o.customer||{};return c.taxExempt!=null?!!c.taxExempt:c.kind==="wholesale";}
+function taxRateOf(o,live){const c=o.customer||{};return c.taxRate!=null?+c.taxRate||0:(live?+S.pricing.taxRate||0:0);}
+function taxOf(o,live){if(taxExempt(o))return 0;const r=taxRateOf(o,live);if(r<=0)return 0;const c=(o.orderCharge!=null)?+o.orderCharge||0:orderChargeLive();return Math.round((orderSubtotal(o)+c+rushOf(o))*r)/100;}
+function orderTotal(o){const c=(o.orderCharge!=null)?+o.orderCharge||0:orderChargeLive();return orderSubtotal(o)+c+rushOf(o)+taxOf(o);}
 function orderCost(o){return (o.items||[]).reduce((s,it)=>s+itemCost(it)*(+it.qty||0),0);}
 function orderPieces(o){return (o.items||[]).reduce((s,it)=>s+(+it.qty||0),0);}
 function balance(o){return orderTotal(o)-(o.paid?orderTotal(o):(+o.deposit||0));}
@@ -157,10 +161,10 @@ function renderApp(){
   r.innerHTML = topbar() + `<main><div class="wrap" id="view"></div></main>`;
   drawSpiral();
   document.getElementById("view").innerHTML = viewHtml();
-  wireTop(); wireView();
+  wireTop(); wireView(); showActiveTab();
 }
 function topbar(){
-  const tabs=[["board","Board"],["orders","Orders"],["customers","Customers"],["inventory","Inventory"],["money","Money"],["pricing","Pricing"]];
+  const tabs=[["board","Board"],["orders","Orders"],["customers","Customers"],["inventory","Inventory"],["reports","Reports"],["pricing","Pricing"]];
   return `<header class="bar"><div class="wrap">
     <div class="brand"><canvas id="spiral" width="76" height="76"></canvas>
       <div><div class="est">Est. handmade</div><div class="word">Hippy <em>List</em></div></div></div>
@@ -174,7 +178,7 @@ function viewHtml(){
   if(tab==="new")return renderBuilder();
   if(tab==="customers")return renderCustomers();
   if(tab==="inventory")return renderInventory();
-  if(tab==="money")return renderMoney();
+  if(tab==="reports"||tab==="money")return renderReports();
   if(tab==="pricing")return renderPricing();
   if(tab==="settings")return renderSettings();
   return "";
@@ -239,7 +243,7 @@ function renderOrders(){
 
 /* ─────────── Builder (new / edit order) ─────────── */
 function renderBuilder(){
-  const t=draft,sub=orderSubtotal(t),chg=orderChargeLive(),rsh=rushOf(t),tot=sub+chg+rsh,dep=+t.deposit||0;
+  const t=draft,sub=orderSubtotal(t),chg=orderChargeLive(),rsh=rushOf(t),tax=taxOf(t,true),tot=sub+chg+rsh+tax,dep=+t.deposit||0,txOn=(+S.pricing.taxRate||0)>0;
   const names=[...new Set(S.orders.map(o=>o.customer&&o.customer.name).concat(S.customers.map(c=>c.name)).filter(Boolean))];
   return `<div class="view-head"><h1>${editId?"Edit order":"New order"}</h1><div class="sub">${editId?`HL-${(S.orders.find(o=>o.id===editId)||{}).ref||""}`:"Build it and it prices itself"}</div></div>
   <div class="builder"><div>
@@ -262,6 +266,7 @@ function renderBuilder(){
     <div class="inv-row"><span>Subtotal · <span class="tnum" id="sum-pc">${orderPieces(t)}</span> pc</span><b class="tnum" id="sum-sub">${money(sub)}</b></div>
     <div class="inv-row" id="sum-chg-row" style="${chg>0?"":"display:none"}"><span>Order charge</span><b class="tnum" id="sum-chg">${money(chg)}</b></div>
     <div class="inv-row" id="sum-rush-row" style="${rsh>0?"":"display:none"}"><span>Rush fee</span><b class="tnum" id="sum-rush">${money(rsh)}</b></div>
+    ${txOn?`<div class="inv-row"><span>Sales tax <span id="tax-note">${taxExempt(t)?"· exempt":`· ${S.pricing.taxRate}%`}</span></span><b class="tnum" id="sum-tax">${money(tax)}</b></div><label class="tax-ex"><input type="checkbox" id="d-taxex" ${taxExempt(t)?"checked":""}> Tax exempt <small>(wholesale / resale certificate)</small></label>`:""}
     <div class="inv-row total"><span>Total</span><span class="big tnum" id="sum-tot">${money(tot)}</span></div>
     <div class="inv-dep"><span style="font-size:13px;color:var(--muted)">Deposit $</span><input class="tnum" id="d-dep" type="number" min="0" step="1" value="${t.deposit||""}" placeholder="0"></div>
     <div class="inv-row"><span>Balance due</span><b class="tnum" id="sum-bal">${money(tot-dep)}</b></div>
@@ -300,21 +305,21 @@ function custAgg(){
   S.orders.forEach(o=>{ const n=o.customer&&o.customer.name; if(!n)return; if(!map[n])map[n]={name:n,phone:o.customer.phone,email:o.customer.email,kind:o.customer.kind||"retail",orders:0,spent:0,last:null}; const m=map[n]; m.orders++; m.spent+=orderTotal(o); if(!m.last||o.createdAt>m.last)m.last=o.createdAt; if(!m.phone)m.phone=o.customer.phone; if(!m.email)m.email=o.customer.email; });
   return Object.values(map).sort((a,b)=>b.spent-a.spent);
 }
+function initials(n){return String(n||"?").trim().split(/\s+/).slice(0,2).map(w=>w[0]||"").join("").toUpperCase()||"?";}
+const ICO={phone:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/></svg>`,mail:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>`,chat:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg>`};
 function renderCustomers(){
   const q=search.trim().toLowerCase();
-  let list=custAgg(); if(q) list=list.filter(c=>c.name.toLowerCase().includes(q));
+  let list=custAgg(); if(q) list=list.filter(c=>c.name.toLowerCase().includes(q)||(c.phone||"").includes(q)||(c.email||"").toLowerCase().includes(q));
   let h=`<div class="view-head"><h1>Customers</h1><div class="sub">${list.length} total</div></div>`;
-  h+=`<div class="toolbar"><div class="search">${searchIco()}<input id="search" value="${esc(search)}" placeholder="Search customers"></div></div>`;
+  h+=`<div class="toolbar"><div class="search">${searchIco()}<input id="search" value="${esc(search)}" placeholder="Search name, phone or email"></div></div>`;
   if(!list.length) return h+emptyState("No customers yet","They appear here as you take orders.");
-  h+=`<div class="panel" style="padding:0"><div class="tablewrap"><table class="data"><thead><tr><th>Name</th><th>Type</th><th>Contact</th><th>Orders</th><th style="text-align:right">Lifetime</th><th>Last order</th></tr></thead><tbody>`;
-  list.forEach(c=>{h+=`<tr class="rowlink" data-cust="${esc(c.name)}">
-    <td class="nm">${esc(c.name)}</td>
-    <td><span class="badge ${c.kind==="wholesale"?"whole":""}">${c.kind}</span></td>
-    <td class="muted">${esc(c.phone||c.email||"—")}</td>
-    <td class="tnum">${c.orders}</td>
-    <td class="tnum" style="text-align:right;font-weight:700">${money(c.spent)}</td>
-    <td class="muted">${c.last?fmtShort(c.last):"—"}</td></tr>`;});
-  return h+`</tbody></table></div></div>`;
+  h+=`<div class="clist">${list.map(c=>`<div class="ccard" tabindex="0" role="button" data-cust="${esc(c.name)}">
+    <div class="cav">${esc(initials(c.name))}</div>
+    <div class="cmain"><div class="cname"><span>${esc(c.name)}</span><span class="badge ${c.kind==="wholesale"?"whole":""}">${c.kind}</span></div>
+      <div class="ccontact">${c.phone?`<span>${ICO.phone}${esc(c.phone)}</span>`:""}${c.email?`<span>${ICO.mail}${esc(c.email)}</span>`:""}${!c.phone&&!c.email?`<span class="none">No contact on file</span>`:""}</div></div>
+    <div class="cnums"><b class="tnum">${money(c.spent)}</b><small>${c.orders} order${c.orders===1?"":"s"}${c.last?` · ${fmtShort(c.last)}`:""}</small></div>
+  </div>`).join("")}</div>`;
+  return h;
 }
 
 /* ─────────── Inventory ─────────── */
@@ -339,26 +344,76 @@ function renderInventory(){
   return h;
 }
 
-/* ─────────── Money ─────────── */
-function renderMoney(){
-  const booked=S.orders.reduce((s,o)=>s+orderTotal(o),0);
-  const collected=S.orders.reduce((s,o)=>s+(o.paid?orderTotal(o):(+o.deposit||0)),0);
-  const outstanding=booked-collected;
-  const profit=S.orders.reduce((s,o)=>s+(orderTotal(o)-orderCost(o)),0);
-  // last 6 months revenue
-  const months=[]; const now=new Date();
-  for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push({key:d.toISOString().slice(0,7),label:d.toLocaleDateString("en-US",{month:"short"}),v:0});}
-  S.orders.forEach(o=>{const k=(o.createdAt||"").slice(0,7);const m=months.find(x=>x.key===k);if(m)m.v+=orderTotal(o);});
-  const max=Math.max(1,...months.map(m=>m.v));
-  let h=`<div class="view-head"><h1>Money</h1><div class="sub">Across all orders</div><div class="right"><button class="btn sm" id="exportOrders">Export orders CSV</button></div></div>`;
+
+/* ─────────── Reports ─────────── */
+let rptRange="month";
+const RANGES=[["month","This month"],["last","Last month"],["90","Last 90 days"],["year","This year"],["all","All time"]];
+function rangeBounds(k){const n=new Date();let a=null,b=null;
+  if(k==="month")a=new Date(n.getFullYear(),n.getMonth(),1);
+  else if(k==="last"){a=new Date(n.getFullYear(),n.getMonth()-1,1);b=new Date(n.getFullYear(),n.getMonth(),1);}
+  else if(k==="90")a=new Date(n.getTime()-90*864e5);
+  else if(k==="year")a=new Date(n.getFullYear(),0,1);
+  return {a,b};}
+function inRange(o,r){const t=Date.parse(o.createdAt||"");if(isNaN(t))return !r.a;return (!r.a||t>=r.a.getTime())&&(!r.b||t<r.b.getTime());}
+function collectedOf(o){const t=orderTotal(o);return o.paid?t:Math.min(t,+o.deposit||0);}
+function costParts(o){let blank=0,labor=0,mat=0,dye=0;(o.items||[]).forEach(it=>{const q=+it.qty||0;blank+=blankCost(it.garment)*q;labor+=(techMin(it.technique)/60)*(+S.pricing.laborRate||0)*q;mat+=matSum("piece")*q;dye+=(+it.colors||0)*matSum("color")*q;});return {blank,labor,mat,dye};}
+function pct(a,b){return b>0?Math.round(a/b*100):0;}
+function groupBy(list,keyFn){const m={};list.forEach(o=>(o.items||[]).forEach(it=>{const k=keyFn(it)||"—";if(!m[k])m[k]={name:k,pieces:0,sales:0};const q=+it.qty||0;m[k].pieces+=q;m[k].sales+=itemUnit(it)*q;}));return Object.values(m).sort((a,b)=>b.sales-a.sales);}
+function hrow(label,val,share,opt){opt=opt||{};return `<div class="hrow"${opt.open?` data-open="${opt.open}"`:""}${opt.cust?` data-cust="${esc(opt.cust)}"`:""} title="${esc(label)}: ${money(val)}${share!=null?` (${share}%)`:""}"><div class="hl"><span class="hn">${opt.dot?`<i class="dot" style="background:${opt.dot}"></i>`:""}${esc(label)}</span>${opt.sub?`<small>${esc(opt.sub)}</small>`:""}</div><div class="htrack"><div class="hfill" style="width:${Math.max(share||0,share>0?2:0)}%;${opt.color?`background:${opt.color}`:""}"></div></div><div class="hv tnum">${money(val)}${share!=null?`<small>${share}%</small>`:""}</div></div>`;}
+function renderReports(){
+  const r=rangeBounds(rptRange), list=S.orders.filter(o=>inRange(o,r)), rl=(RANGES.find(x=>x[0]===rptRange)||[])[1]||"";
+  const sales=list.reduce((s,o)=>s+orderTotal(o),0), coll=list.reduce((s,o)=>s+collectedOf(o),0), owed=sales-coll;
+  const tax=list.reduce((s,o)=>s+taxOf(o),0), taxColl=list.reduce((s,o)=>{const t=taxOf(o);if(!t)return s;const tot=orderTotal(o);return s+(o.paid?t:t*Math.min(1,(+o.deposit||0)/tot));},0);
+  const cp=list.reduce((a,o)=>{const c=costParts(o);a.blank+=c.blank;a.labor+=c.labor;a.mat+=c.mat;a.dye+=c.dye;return a;},{blank:0,labor:0,mat:0,dye:0});
+  const cost=cp.blank+cp.labor+cp.mat+cp.dye, profit=sales-tax-cost, pieces=list.reduce((s,o)=>s+orderPieces(o),0);
+  const rushN=list.filter(o=>rushOn(o)).length, rushFees=list.reduce((s,o)=>s+rushOf(o),0);
+  const ret=list.filter(o=>(o.customer||{}).kind!=="wholesale"), whl=list.filter(o=>(o.customer||{}).kind==="wholesale");
+  const retS=ret.reduce((s,o)=>s+orderTotal(o),0), whlS=whl.reduce((s,o)=>s+orderTotal(o),0);
+  let h=`<div class="view-head"><h1>Reports</h1><div class="sub">${esc(rl)} · ${list.length} order${list.length===1?"":"s"}</div><div class="right"><button class="btn sm" id="exportReport">Export CSV</button></div></div>`;
+  h+=`<div class="seg rpt-range" role="tablist">${RANGES.map(([k,l])=>`<button data-rng="${k}" aria-pressed="${k===rptRange}">${l}</button>`).join("")}</div>`;
   h+=`<div class="money-cards">
-    <div class="mcard"><div class="l">Booked value</div><div class="v berry tnum">${money(booked)}</div><div class="s">${S.orders.length} orders</div></div>
-    <div class="mcard"><div class="l">Collected</div><div class="v good tnum">${money(collected)}</div><div class="s">deposits + paid</div></div>
-    <div class="mcard"><div class="l">Outstanding</div><div class="v tnum">${money(outstanding)}</div><div class="s">still owed</div></div>
-    <div class="mcard"><div class="l">Est. profit</div><div class="v tnum">${money(profit)}</div><div class="s">after materials + labor</div></div></div>`;
-  h+=`<div class="panel"><h2>Revenue — last 6 months</h2><div class="barchart">${months.map(m=>`<div class="bg"><div class="bv tnum">${m.v?money(m.v):""}</div><div class="bar" style="height:${Math.round(m.v/max*140)}px"></div><div class="bl">${m.label}</div></div>`).join("")}</div></div>`;
-  return h;
+    <div class="mcard"><div class="l">Sales</div><div class="v berry tnum">${money(sales)}</div><div class="s">${list.length} orders booked</div></div>
+    <div class="mcard"><div class="l">Collected</div><div class="v good tnum">${money(coll)}</div><div class="s">${pct(coll,sales)}% of sales in hand</div></div>
+    <div class="mcard"><div class="l">Still owed</div><div class="v tnum">${money(owed)}</div><div class="s">on these orders</div></div>
+    <div class="mcard"><div class="l">Est. profit</div><div class="v tnum">${money(profit)}</div><div class="s">${pct(profit,sales-tax)}% margin · after costs${tax>0?" & tax":""}</div></div>
+    <div class="mcard"><div class="l">Pieces</div><div class="v tnum">${pieces}</div><div class="s">${list.length?`${(pieces/list.length).toFixed(1)} per order`:"—"}</div></div>
+    <div class="mcard"><div class="l">Avg order</div><div class="v tnum">${money(list.length?sales/list.length:0)}</div><div class="s">${pieces?`${money(sales/pieces)} per piece`:"—"}</div></div>
+    <div class="mcard"><div class="l">Rush</div><div class="v tnum">${money(rushFees)}</div><div class="s">${rushN} rush order${rushN===1?"":"s"}</div></div>
+    <div class="mcard"><div class="l">Sales tax</div><div class="v tnum">${money(taxColl)}</div><div class="s">${tax>0?"collected · owed to the state":"not charging tax yet"}</div></div></div>`;
+  if(!list.length){ h+=emptyState("No orders in this range","Pick a wider range above."); return h+owedPanel()+pipelinePanel(); }
+  // sales over time
+  let buckets=[];
+  if(rptRange==="month"||rptRange==="last"){const a=r.a,end=r.b||new Date(a.getFullYear(),a.getMonth()+1,1);for(let d=new Date(a);d<end;d.setDate(d.getDate()+7)){const s=new Date(d),e=new Date(Math.min(d.getTime()+7*864e5,end.getTime()));buckets.push({label:`${s.getMonth()+1}/${s.getDate()}`,a:s.getTime(),b:e.getTime(),v:0});}}
+  else{const n=new Date(),count=rptRange==="90"?3:rptRange==="year"?n.getMonth()+1:12;for(let i=count-1;i>=0;i--){const s=new Date(n.getFullYear(),n.getMonth()-i,1),e=new Date(n.getFullYear(),n.getMonth()-i+1,1);buckets.push({label:s.toLocaleDateString("en-US",{month:"short"}),a:s.getTime(),b:e.getTime(),v:0});}}
+  list.forEach(o=>{const t=Date.parse(o.createdAt||"");const bk=buckets.find(x=>t>=x.a&&t<x.b);if(bk)bk.v+=orderTotal(o);});
+  const mx=Math.max(1,...buckets.map(b=>b.v));
+  h+=`<div class="panel"><h2>Sales over time <small class="h2s">${rptRange==="month"||rptRange==="last"?"by week":"by month"}</small></h2><div class="barchart">${buckets.map(b=>`<div class="bg" title="${b.label}: ${money(b.v)}"><div class="bv tnum">${b.v?money(b.v):""}</div><div class="bar" style="height:${Math.round(b.v/mx*140)}px"></div><div class="bl">${b.label}</div></div>`).join("")}</div></div>`;
+  // where the money goes
+  const parts=[["Blanks",cp.blank,"Garments you dye on"],["Your labor",cp.labor,`Dye time × $${S.pricing.laborRate}/hr`],["Dyes",cp.dye,"Per dye color"],["Materials",cp.mat,"Soda ash, bottles, bags…"]];
+  if(tax>0) parts.push(["Sales tax",tax,"Goes to the state"]);
+  h+=`<div class="panel"><h2>Where the money goes <small class="h2s">of ${money(sales)} in sales</small></h2>${parts.map(([l,v,s])=>hrow(l,v,pct(v,sales),{sub:s})).join("")}${hrow("Profit",profit,pct(profit,sales),{sub:"What's left for you",color:"var(--good)"})}<div class="hint">Costs use your current Pricing numbers. Labor is your own time — if you're the one dyeing, that part is yours too.</div></div>`;
+  // by technique / garment
+  const tech=groupBy(list,it=>it.technique), garm=groupBy(list,it=>it.garment), pal=groupBy(list,it=>it.palette);
+  const tbl=(title,rows)=>`<div class="panel"><h2>${title}</h2>${rows.slice(0,8).map(x=>hrow(x.name,x.sales,pct(x.sales,sales),{sub:`${x.pieces} piece${x.pieces===1?"":"s"}`})).join("")}</div>`;
+  h+=`<div class="rgrid">${tbl("By technique",tech)}${tbl("By garment",garm)}</div>`;
+  // customers + mix
+  const cm={};list.forEach(o=>{const n=(o.customer||{}).name||"Unnamed";if(!cm[n])cm[n]={name:n,kind:(o.customer||{}).kind||"retail",orders:0,sales:0,owed:0};cm[n].orders++;cm[n].sales+=orderTotal(o);cm[n].owed+=balance(o);});
+  const cust=Object.values(cm).sort((a,b)=>b.sales-a.sales);
+  h+=`<div class="rgrid"><div class="panel"><h2>Top customers</h2>${cust.slice(0,8).map(c=>hrow(c.name,c.sales,pct(c.sales,sales),{sub:`${c.orders} order${c.orders===1?"":"s"}${c.owed>0.005?` · owes ${money(c.owed)}`:""}`,cust:c.name})).join("")}</div>
+    <div class="panel"><h2>Sales mix</h2>${hrow("Retail",retS,pct(retS,sales),{sub:`${ret.length} orders`})}${hrow("Wholesale",whlS,pct(whlS,sales),{sub:`${whl.length} orders`})}<div class="mix-sep"></div>${pal.slice(0,5).map(x=>hrow(x.name,x.sales,pct(x.sales,sales),{sub:`${x.pieces} pcs · color scheme`})).join("")}</div></div>`;
+  return h+owedPanel()+pipelinePanel();
 }
+function owedPanel(){
+  const now=Date.now(), rows=S.orders.filter(o=>balance(o)>0.005).sort((a,b)=>Date.parse(a.createdAt||0)-Date.parse(b.createdAt||0));
+  const tot=rows.reduce((s,o)=>s+balance(o),0);
+  if(!rows.length) return `<div class="panel"><h2>Who owes you</h2><div class="muted">Nobody — every order is paid up. ✌</div></div>`;
+  return `<div class="panel" style="padding:0"><div style="padding:16px 18px 0"><h2 style="margin:0">Who owes you <small class="h2s">${money(tot)} across ${rows.length} order${rows.length===1?"":"s"} · all time</small></h2></div><div class="tablewrap"><table class="data"><thead><tr><th>Order</th><th>Customer</th><th class="hide-sm">Stage</th><th>Age</th><th class="hide-sm" style="text-align:right">Total</th><th class="hide-sm" style="text-align:right">Paid</th><th style="text-align:right">Balance</th></tr></thead><tbody>${rows.map(o=>{const age=Math.max(0,Math.floor((now-Date.parse(o.createdAt||now))/864e5)),st=stageOf(o.status);return `<tr class="rowlink" data-open="${o.id}"><td><b class="tnum" style="color:var(--berry)">HL-${o.ref||"—"}</b></td><td class="nm">${esc((o.customer||{}).name||"Unnamed")}</td><td class="hide-sm"><span class="badge" style="color:${st.hex}">● ${st.label}</span></td><td class="tnum ${age>30?"low":""}">${age}d</td><td class="hide-sm tnum" style="text-align:right">${money(orderTotal(o))}</td><td class="hide-sm tnum" style="text-align:right">${money(collectedOf(o))}</td><td class="tnum" style="text-align:right;font-weight:700">${money(balance(o))}</td></tr>`;}).join("")}</tbody></table></div></div>`;
+}
+function pipelinePanel(){
+  const open=S.orders.filter(o=>o.status!=="delivered"), tot=open.reduce((s,o)=>s+orderTotal(o),0);
+  return `<div class="panel"><h2>In the pipeline <small class="h2s">${money(tot)} in open orders · all time</small></h2>${STAGES.filter(s=>s.key!=="delivered").map(s=>{const os=open.filter(o=>o.status===s.key),v=os.reduce((a,o)=>a+orderTotal(o),0);return hrow(s.label,v,pct(v,tot),{sub:`${os.length} order${os.length===1?"":"s"} · ${os.reduce((a,o)=>a+orderPieces(o),0)} pcs`,dot:s.hex,color:s.hex});}).join("")}</div>`;
+}
+function exportReport(){const r=rangeBounds(rptRange),list=S.orders.filter(o=>inRange(o,r));const rows=[["Order","Date","Customer","Type","Stage","Pieces","Rush fee","Sales tax","Total","Collected","Balance","Blank cost","Labor","Dyes","Materials","Est. profit"]];list.forEach(o=>{const c=costParts(o),t=orderTotal(o),tx=taxOf(o);rows.push([`HL-${o.ref||""}`,(o.createdAt||"").slice(0,10),(o.customer||{}).name||"",(o.customer||{}).kind||"",stageOf(o.status).label,orderPieces(o),rushOf(o).toFixed(2),tx.toFixed(2),t.toFixed(2),collectedOf(o).toFixed(2),balance(o).toFixed(2),c.blank.toFixed(2),c.labor.toFixed(2),c.dye.toFixed(2),c.mat.toFixed(2),(t-tx-c.blank-c.labor-c.dye-c.mat).toFixed(2)]);});downloadFile(`hippy-report-${rptRange}.csv`,rows.map(x=>x.map(csv).join(",")).join("\n"));toast("Exported");}
 
 /* ─────────── Pricing ─────────── */
 function renderPricing(){
@@ -368,6 +423,9 @@ function renderPricing(){
   const techRows=p.techniques.map((t,i)=>`<tr><td><input class="rate-name" data-tt="name" data-ti="${i}" value="${esc(t.name)}"></td><td><input data-tt="min" data-ti="${i}" type="number" min="0" step="1" value="${t.min}"></td><td style="text-align:right"><button class="btn sm ghost danger" data-trm="${i}">✕</button></td></tr>`).join("");
   return `<div class="view-head"><h1>Pricing</h1><div class="sub">Your cost model — every order prices from here</div><div class="right"><button class="btn berry" id="savePricing">Save pricing</button></div></div>
   <div class="banner">Set these to your real blank costs, ink prices, dye-time and margin. Edits apply to new orders; saved orders keep their quoted price.</div>
+  <div class="panel"><h2>Sales tax</h2><div class="grid3">
+    <label class="fld">Sales tax rate %<input class="inp tnum" id="s-tax" type="number" min="0" max="20" step="0.05" value="${p.taxRate||0}" placeholder="0"></label></div>
+    <div class="hint">Leave at 0 until you have an Ohio vendor's license. Use your county's total rate. Tax covers the whole order (pieces, rush, order charges). Wholesale orders are exempt automatically; flip “Tax exempt” on any order to change it.</div></div>
   <div class="panel"><h2>Rush orders</h2><div class="grid3">
     <label class="fld">Charge rush as<select class="inp" id="s-rush-type"><option value="percent" ${p.rush.type==="percent"?"selected":""}>% of the order</option><option value="flat" ${p.rush.type==="flat"?"selected":""}>Flat fee per order</option><option value="piece" ${p.rush.type==="piece"?"selected":""}>Per piece</option></select></label>
     <label class="fld"><span id="s-rush-unit">${p.rush.type==="percent"?"Rush %":"Rush $"}</span><input class="inp tnum" id="s-rush-amt" type="number" min="0" step="1" value="${p.rush.amount}"></label></div>
@@ -435,30 +493,33 @@ function renderLogin(){
 
 /* ─────────── Wiring ─────────── */
 function wireTop(){
-  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;search="";renderApp();});
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{tab=b.dataset.tab;search="";rerender();showActiveTab();window.scrollTo(0,0);});
   const nb=document.getElementById("newBtn"); if(nb) nb.onclick=()=>{startNew();};
   const sb2=document.getElementById("setBtn"); if(sb2) sb2.onclick=()=>{tab="settings";renderApp();};
 }
+function showActiveTab(){const t=document.querySelector('.tab[aria-selected="true"]'),n=document.querySelector('nav.tabs');if(t&&n){const l=t.offsetLeft-n.offsetLeft,w=t.offsetWidth;if(l<n.scrollLeft||l+w>n.scrollLeft+n.clientWidth)n.scrollTo({left:Math.max(0,l-24),behavior:'smooth'});}}
 function startNew(){ editId=null; draft=freshDraft(); tab="new"; renderApp(); }
 
 function wireView(){
   const sb2=document.getElementById("search"); if(sb2) sb2.oninput=()=>{search=sb2.value; const v=document.getElementById("view"); v.innerHTML=viewHtml(); wireView(); const n=document.getElementById("search"); if(n){n.focus();const x=n.value;n.value="";n.value=x;}};
   document.querySelectorAll("[data-open]").forEach(el=>{el.onclick=()=>openOrder(el.dataset.open);el.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openOrder(el.dataset.open);}};});
   document.querySelectorAll("[data-mv]").forEach(b=>b.onclick=e=>{e.stopPropagation();moveStage(b.dataset.mv,+b.dataset.dir);});
-  document.querySelectorAll("[data-cust]").forEach(el=>el.onclick=()=>openCustomer(el.dataset.cust));
+  document.querySelectorAll("[data-cust]").forEach(el=>{el.onclick=()=>openCustomer(el.dataset.cust);el.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openCustomer(el.dataset.cust);}};});
   const nb2=document.getElementById("newBtn2"); if(nb2) nb2.onclick=startNew;
 
   if(tab==="new") wireBuilder();
   if(tab==="inventory") wireInventory();
   if(tab==="pricing") wirePricing();
   if(tab==="settings") wireSettings();
-  if(tab==="money"){ const e=document.getElementById("exportOrders"); if(e) e.onclick=exportOrders; }
+  if(tab==="reports"){ const e=document.getElementById("exportReport"); if(e) e.onclick=exportReport; document.querySelectorAll("[data-rng]").forEach(b=>b.onclick=()=>{rptRange=b.dataset.rng;rerender();}); }
 }
 function wireBuilder(){
   bind("d-name",v=>draft.customer.name=v); bind("d-phone",v=>draft.customer.phone=v); bind("d-email",v=>draft.customer.email=v);
   bind("d-due",v=>draft.customer.due=v); bind("d-kind",v=>draft.customer.kind=v); bind("d-notes",v=>draft.notes=v);
   const dep=document.getElementById("d-dep"); if(dep) dep.oninput=()=>{draft.deposit=num(dep.value);soft();};
   const rz=document.getElementById("d-rush"); if(rz) rz.onchange=()=>{draft.customer.rush=rz.checked;soft();};
+  const tz=document.getElementById("d-taxex"); if(tz) tz.onchange=()=>{draft.customer.taxExempt=tz.checked;soft();};
+  const kz=document.getElementById("d-kind"); if(kz) kz.addEventListener("change",()=>soft());
   document.querySelectorAll("#items [data-f]").forEach(el=>{const i=+el.dataset.i,f=el.dataset.f;el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{draft.items[i][f]=el.value;soft();});});
   document.querySelectorAll("[data-bd]").forEach(b=>b.onclick=()=>{const el=document.getElementById("bd-"+b.dataset.bd);el.classList.toggle("open");b.textContent=el.classList.contains("open")?"hide math":"price math";});
   document.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{draft.items.splice(+b.dataset.rm,1);rerender();});
@@ -468,7 +529,8 @@ function wireBuilder(){
 }
 function soft(){
   draft.items.forEach((it,i)=>{const row=document.querySelector(`.lineitem[data-i="${i}"]`);if(!row)return;const p=row.querySelector('[data-f="price"]');if(p)p.placeholder=String(suggestP(it));const bd=row.querySelector(".breakdown");if(bd)bd.textContent=priceMath(it);});
-  const sub=orderSubtotal(draft),chg=orderChargeLive(),rsh=rushOf(draft),tot=sub+chg+rsh,dep=num(draft.deposit);
+  const sub=orderSubtotal(draft),chg=orderChargeLive(),rsh=rushOf(draft),tax=taxOf(draft,true),tot=sub+chg+rsh+tax,dep=num(draft.deposit);
+  setTxt("sum-tax",money(tax));setTxt("tax-note",taxExempt(draft)?"· exempt":`· ${S.pricing.taxRate}%`);const tx=document.getElementById("d-taxex");if(tx)tx.checked=taxExempt(draft);
   setTxt("sum-sub",money(sub));setTxt("sum-chg",money(chg));setTxt("sum-rush",money(rsh));const rr=document.getElementById("sum-rush-row");if(rr)rr.style.display=rsh>0?"":"none";setTxt("sum-tot",money(tot));setTxt("sum-bal",money(tot-dep));setTxt("sum-pc",orderPieces(draft));
   const cr=document.getElementById("sum-chg-row");if(cr)cr.style.display=chg>0?"":"none";
 }
@@ -482,6 +544,7 @@ function wireInventory(){
 function wirePricing(){
   const n=(id,k)=>{const el=document.getElementById(id);if(el)el.oninput=()=>S.pricing[k]=num(el.value);};
   n("s-labor","laborRate");n("s-markup","markup");n("s-round","roundTo");
+  const tr=document.getElementById("s-tax"); if(tr) tr.oninput=()=>{S.pricing.taxRate=num(tr.value);};
   const rt=document.getElementById("s-rush-type"),ra=document.getElementById("s-rush-amt"); if(rt) rt.onchange=()=>{S.pricing.rush.type=rt.value;document.getElementById("s-rush-unit").textContent=rt.value==="percent"?"Rush %":"Rush $";}; if(ra) ra.oninput=()=>{S.pricing.rush.amount=num(ra.value);};
   document.querySelectorAll("[data-mt]").forEach(el=>{const i=+el.dataset.mi,f=el.dataset.mt;el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{S.pricing.materials[i][f]=f==="cost"?num(el.value):el.value;});});
   document.querySelectorAll("[data-mrm]").forEach(b=>b.onclick=()=>{S.pricing.materials.splice(+b.dataset.mrm,1);rerender();});
@@ -510,6 +573,7 @@ async function saveOrder(){
   const items=clean.map(it=>({garment:it.garment,size:it.size,qty:+it.qty||0,technique:it.technique,palette:it.palette,colors:+it.colors||0,price:itemUnit(it)}));
   const cust={name:draft.customer.name.trim(),phone:draft.customer.phone||"",email:draft.customer.email||"",due:draft.customer.due||"",kind:draft.customer.kind||"retail"};
   if(draft.customer.rush){cust.rush=true;cust.rushFee=rushLive({items});}
+  cust.taxExempt=taxExempt({customer:{...cust,taxExempt:draft.customer.taxExempt}}); cust.taxRate=+S.pricing.taxRate||0;
   if(editId){
     const ex=S.orders.find(o=>o.id===editId)||{};
     if(ex.customer&&ex.customer.invoicedAt) cust.invoicedAt=ex.customer.invoicedAt;
@@ -526,7 +590,7 @@ async function putOrder(o,isNew){
 }
 async function moveStage(id,dir){const o=S.orders.find(x=>x.id===id);if(!o)return;const ni=Math.min(STAGES.length-1,Math.max(0,stageIdx(o.status)+dir));o.status=STAGES[ni].key;if(LIVE){await sb.from("orders").update({status:o.status}).eq("id",id);}else saveLocal();rerender();if(openId)renderDrawer();}
 async function changeStatus(id,status){const o=S.orders.find(x=>x.id===id);if(o)o.status=status;if(LIVE){await sb.from("orders").update({status}).eq("id",id);}else saveLocal();rerender();if(openId)renderDrawer();}
-async function togglePaid(id){const o=S.orders.find(x=>x.id===id);if(!o)return;o.paid=!o.paid;if(LIVE){await sb.from("orders").update({paid:o.paid}).eq("id",id);}else saveLocal();rerender();renderDrawer();}
+async function togglePaid(id){const o=S.orders.find(x=>x.id===id);if(!o)return;o.paid=!o.paid;const c={...o.customer};if(o.paid)c.paidAt=new Date().toISOString();else{delete c.paidAt;delete c.receiptAt;}o.customer=c;if(LIVE){await sb.from("orders").update({paid:o.paid,customer:c}).eq("id",id);}else saveLocal();rerender();renderDrawer();if(o.paid)toast("Marked paid — send them a receipt ✌");}
 async function removeOrder(id){S.orders=S.orders.filter(x=>x.id!==id);if(LIVE){await sb.from("orders").delete().eq("id",id);}else saveLocal();rerender();toast("Order deleted");}
 async function ensureCustomer(cust){
   if(S.customers.find(c=>c.name.toLowerCase()===cust.name.toLowerCase())) return;
@@ -550,7 +614,7 @@ function closeDrawer(){openId=null;document.getElementById("drawer").classList.r
 function renderDrawer(){ openKind==="customer"?renderCustDrawer():renderOrderDrawer(); }
 function renderOrderDrawer(){
   const o=S.orders.find(x=>x.id===openId); const d=document.getElementById("drawer"); if(!o){closeDrawer();return;}
-  const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tot=sub+chg+rsh,dep=+o.deposit||0;
+  const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tax=taxOf(o),tot=sub+chg+rsh+tax,dep=+o.deposit||0;
   d.innerHTML=`<div class="dr-head"><div style="min-width:0;flex:1"><div class="cust">${esc(o.customer.name||"Unnamed")}${rushOn(o)?' <span class="rush-tag sm">⚡ RUSH</span>':""}</div>
     <div class="sub">HL-${o.ref||"—"} · ${o.customer.phone?esc(o.customer.phone)+" · ":""}${o.customer.due?"due "+fmtDue(o.customer.due):"no due date"}</div></div>
     <button class="icon-btn" id="drClose">✕</button></div>
@@ -561,19 +625,20 @@ function renderOrderDrawer(){
       <div class="inv-row"><span>Subtotal</span><b class="tnum">${money(sub)}</b></div>
       ${chg>0?`<div class="inv-row"><span>Order charge</span><b class="tnum">${money(chg)}</b></div>`:""}
       ${rsh>0?`<div class="inv-row"><span>Rush fee</span><b class="tnum">${money(rsh)}</b></div>`:""}
+      ${tax>0?`<div class="inv-row"><span>Sales tax · ${taxRateOf(o)}%</span><b class="tnum">${money(tax)}</b></div>`:""}
       <div class="inv-row total"><span>Total</span><span class="big tnum">${money(tot)}</span></div>
       <div class="inv-row"><span>${o.paid?"Paid in full":"Deposit"}</span><b class="tnum">${money(o.paid?tot:dep)}</b></div>
       <div class="inv-row"><span>Balance due</span><b class="tnum">${o.paid?'<span class="paid">Paid</span>':money(tot-dep)}</b></div>
       <div class="save-row"><button class="btn sm ${o.paid?"":"berry"}" id="drPaid">${o.paid?"Mark unpaid":"Mark paid in full"}</button></div></div>
     ${o.notes?`<div><div class="dr-sec-t">Notes</div><div class="note-box">${esc(o.notes)}</div></div>`:""}
     <div><div class="dr-sec-t">Finished pieces</div><div class="photo-grid">${(o.photos||[]).map(u=>`<img src="${esc(u)}" alt="piece">`).join("")}<label class="photo-add">+<input type="file" accept="image/*" id="drPhoto" hidden></label></div></div>
-    <div><div class="dr-sec-t">Send invoice${o.customer.invoicedAt?` <span class="sent-tag">✓ Sent ${fmtShort(o.customer.invoicedAt)}</span>`:""}</div>
+    <div><div class="dr-sec-t">Send ${o.paid?"receipt":"invoice"}${o.customer[sentKey(o)]?` <span class="sent-tag">✓ Sent ${fmtShort(o.customer[sentKey(o)])}</span>`:""}</div>
       <div class="send-grid">
-        <button class="send-btn primary" id="sdSend"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span><span><b>Send PDF</b><small>${canShareFiles()?"Text, email, DM…":"Download + attach"}</small></span></button>
+        <button class="send-btn primary" id="sdSend"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span><span><b>Send ${o.paid?"receipt":"invoice"}</b><small>${canShareFiles()?"Text, email, DM…":"Download + attach"}</small></span></button>
         <button class="send-btn" id="sdPdf"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span><span><b>Download PDF</b><small>Save or print</small></span></button>
       </div>
-      ${o.customer.invoicedAt?"":`<button class="linkbtn" id="sdMark" style="margin-top:10px">Sent it another way? Mark as sent</button>`}
-      ${S.settings.payWith?"":`<div class="hint">Tip: add how customers pay you (Venmo, Cash App…) in <a href="#" id="sdSet">Settings</a> and it goes on every invoice.</div>`}</div>
+      ${o.customer[sentKey(o)]?"":`<button class="linkbtn" id="sdMark" style="margin-top:10px">Sent it another way? Mark as sent</button>`}
+      ${S.settings.payWith||o.paid?"":`<div class="hint">Tip: add how customers pay you (Venmo, Cash App…) in <a href="#" id="sdSet">Settings</a> and it goes on every invoice.</div>`}</div>
     <div><div class="dr-sec-t">Hand off</div><div class="seg handoff"><button id="drTicket">⤓ Work ticket</button></div></div>
   </div>
   <div class="dr-foot"><button class="btn danger ghost" id="drDel">Delete</button><button class="btn" id="drEdit">Edit</button><button class="btn berry block" id="drDone">Done</button></div>`;
@@ -593,12 +658,18 @@ function renderCustDrawer(){
   const name=openId; const d=document.getElementById("drawer");
   const c=custAgg().find(x=>x.name===name); const list=S.orders.filter(o=>(o.customer&&o.customer.name)===name);
   if(!c){closeDrawer();return;}
-  d.innerHTML=`<div class="dr-head"><div style="flex:1;min-width:0"><div class="cust">${esc(c.name)}</div>
-    <div class="sub"><span class="badge ${c.kind==="wholesale"?"whole":""}">${c.kind}</span> · ${c.orders} orders · ${money(c.spent)} lifetime</div></div>
+  const owes=list.reduce((s,o)=>s+balance(o),0), tel=(c.phone||"").replace(/[^\d+]/g,"");
+  d.innerHTML=`<div class="dr-head"><div class="cav lg">${esc(initials(c.name))}</div><div style="flex:1;min-width:0"><div class="cust">${esc(c.name)}</div>
+    <div class="sub"><span class="badge ${c.kind==="wholesale"?"whole":""}">${c.kind}</span>${c.last?` · last order ${fmtShort(c.last)}`:""}</div></div>
     <button class="icon-btn" id="drClose">✕</button></div>
   <div class="dr-body">
-    <div><div class="dr-sec-t">Contact</div><div class="note-box">${esc(c.phone||"")}${c.phone&&c.email?" · ":""}${esc(c.email||"")||((!c.phone&&!c.email)?"No contact on file":"")}</div></div>
-    <div><div class="dr-sec-t">Orders</div><ul class="dr-items">${list.map(o=>`<li data-open="${o.id}" style="cursor:pointer"><span class="q tnum">HL-${o.ref}</span><span class="d">${esc(stageOf(o.status).label)}<br><small>${orderPieces(o)} pieces · ${fmtShort(o.createdAt)}</small></span><span class="p tnum">${money(orderTotal(o))}</span></li>`).join("")}</ul></div>
+    <div class="cstats"><div><b class="tnum">${c.orders}</b><span>order${c.orders===1?"":"s"}</span></div><div><b class="tnum">${money(c.spent)}</b><span>lifetime</span></div><div><b class="tnum ${owes>0.005?"owe":""}">${money(owes)}</b><span>owes</span></div></div>
+    <div><div class="dr-sec-t">Contact</div>
+      ${c.phone?`<div class="crow"><span class="ci">${ICO.phone}</span><span class="cv"><small>Phone</small>${esc(c.phone)}</span>${tel.length>=7?`<a class="cbtn" href="tel:${esc(tel)}">Call</a><a class="cbtn" href="sms:${esc(tel)}">Text</a>`:""}</div>`:""}
+      ${c.email?`<div class="crow"><span class="ci">${ICO.mail}</span><span class="cv"><small>Email</small>${esc(c.email)}</span><a class="cbtn" href="mailto:${esc(c.email)}">Email</a></div>`:""}
+      ${!c.phone&&!c.email?`<div class="muted" style="font-size:13.5px">No contact on file. Add a phone or email on their next order.</div>`:""}
+    </div>
+    <div><div class="dr-sec-t">Orders</div><ul class="dr-items">${list.map(o=>`<li data-open="${o.id}" style="cursor:pointer"><span class="q tnum">HL-${o.ref}</span><span class="d">${esc(stageOf(o.status).label)}${rushOn(o)?' <span class="rush-tag sm">⚡ RUSH</span>':""}<br><small>${orderPieces(o)} pieces · ${fmtShort(o.createdAt)}${balance(o)>0.005?` · owes ${money(balance(o))}`:o.paid?" · paid":""}</small></span><span class="p tnum">${money(orderTotal(o))}</span></li>`).join("")}</ul></div>
   </div>
   <div class="dr-foot"><button class="btn berry block" id="drDone">Done</button></div>`;
   d.querySelector("#drClose").onclick=closeDrawer; d.querySelector("#drDone").onclick=closeDrawer;
@@ -612,16 +683,18 @@ async function addPhoto(o,file){
 }
 
 /* ─────────── Hand-off / export ─────────── */
-function invTotals(o){const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tot=sub+chg+rsh,dep=o.paid?tot:(+o.deposit||0);return {sub,chg,rsh,tot,dep,bal:tot-dep};}
-function invSubject(o){return `Invoice HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`;}
-async function markSent(o){ o.customer={...o.customer,invoicedAt:new Date().toISOString()}; if(LIVE){try{await sb.from("orders").update({customer:o.customer}).eq("id",o.id);}catch(e){}} else saveLocal(); if(openId===o.id) renderDrawer(); }
+function invTotals(o){const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,rsh=rushOf(o),tax=taxOf(o),tot=sub+chg+rsh+tax,dep=o.paid?tot:(+o.deposit||0);return {sub,chg,rsh,tax,rate:taxRateOf(o),tot,dep,bal:tot-dep};}
+function docType(o){return o&&o.paid?"Receipt":"Invoice";}
+function sentKey(o){return o&&o.paid?"receiptAt":"invoicedAt";}
+function invSubject(o){return `${docType(o)} HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`;}
+async function markSent(o){ o.customer={...o.customer,[sentKey(o)]:new Date().toISOString()}; if(LIVE){try{await sb.from("orders").update({customer:o.customer}).eq("id",o.id);}catch(e){}} else saveLocal(); if(openId===o.id) renderDrawer(); }
 /* PDF invoices — built on-device with jsPDF (vector text, loads on first use) */
 let jspdfP=null;
 function loadJsPDF(){ if(window.jspdf) return Promise.resolve(window.jspdf); if(jspdfP) return jspdfP;
   jspdfP=new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";s.onload=()=>res(window.jspdf);s.onerror=()=>{jspdfP=null;rej(new Error("jspdf"));};document.head.appendChild(s);});
   return jspdfP; }
 function pdfSafe(s){ return String(s==null?"":s).replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/[−–]/g,"-").replace(/…/g,"...").replace(/[^\x09\x0A\x0D\x20-\x7E -ÿ—€]/g,"").trim(); }
-function invFileName(o){ return `Invoice-HL-${o.ref||""}-${(S.settings.shop||"Hippy List").replace(/[^A-Za-z0-9]+/g,"-").replace(/^-|-$/g,"")}.pdf`; }
+function invFileName(o){ return `${docType(o)}-HL-${o.ref||""}-${(S.settings.shop||"Hippy List").replace(/[^A-Za-z0-9]+/g,"-").replace(/^-|-$/g,"")}.pdf`; }
 async function buildInvoicePdf(o){
   const {jsPDF}=await loadJsPDF();
   const doc=new jsPDF({unit:"pt",format:"letter"}), W=612, H=792, M=54, R=W-M;
@@ -636,9 +709,9 @@ async function buildInvoicePdf(o){
   doc.setFont("times","bold");doc.setFontSize(26);col(INK);txt(st.shop||"Hippy List",M,y+10);
   doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);
   let fy=y+30;[st.owner,st.contact,st.email].filter(Boolean).forEach(l=>{txt(l,M,fy);fy+=14;});
-  doc.setFont("helvetica","bold");doc.setFontSize(9);col(BERRY);spaced("INVOICE",R,y-2,1.6,"right");
+  doc.setFont("helvetica","bold");doc.setFontSize(9);col(BERRY);spaced(docType(o).toUpperCase(),R,y-2,1.6,"right");
   doc.setFont("times","bold");doc.setFontSize(22);col(INK);txt(`HL-${o.ref||""}`,R,y+20,{align:"right"});
-  doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);txt(new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}),R,y+36,{align:"right"});
+  doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);txt((o.paid?"Paid ":"")+new Date((o.paid&&c.paidAt)||Date.now()).toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}),R,y+36,{align:"right"});
   y=Math.max(fy,y+44)+8; doc.setDrawColor(INK[0],INK[1],INK[2]);doc.setLineWidth(1.6);doc.line(M,y,R,y);
   // bill to / needed by
   y+=28; label("Bill to",M,y); if(c.due) label("Needed by",M+300,y);
@@ -663,10 +736,11 @@ async function buildInvoicePdf(o){
   const need=150+(st.payWith&&!o.paid?70:0)+(st.invoiceNote?30:0); if(y+need>H-M){doc.addPage();y=M+10;}
   const tx=R-230; y+=8;
   const trow=(l,v)=>{doc.setFont("helvetica","normal");doc.setFontSize(10.5);col(MUTED);txt(l,tx,y);doc.setFont("helvetica","bold");col(INK);txt(v,R,y,{align:"right"});y+=18;};
-  trow("Subtotal",money(t.sub)); if(t.chg>0) trow("Order charge",money(t.chg)); if(t.rsh>0) trow("Rush fee",money(t.rsh));
+  trow("Subtotal",money(t.sub)); if(t.chg>0) trow("Order charge",money(t.chg)); if(t.rsh>0) trow("Rush fee",money(t.rsh)); if(t.tax>0) trow(`Sales tax (${t.rate}%)`,money(t.tax));
   doc.setDrawColor(INK[0],INK[1],INK[2]);doc.setLineWidth(1.6);doc.line(tx,y-6,R,y-6); y+=16;
   doc.setFont("times","bold");doc.setFontSize(18);col(INK);txt("Total",tx,y);txt(money(t.tot),R,y,{align:"right"}); y+=22;
   if(o.paid){
+    doc.setFont("helvetica","normal");doc.setFontSize(10.5);col(MUTED);txt("Paid in full",tx,y+14);col(GREEN);doc.setFont("helvetica","bold");txt("Thank you!",tx,y+28);
     doc.setDrawColor(GREEN[0],GREEN[1],GREEN[2]);doc.setLineWidth(2.4);doc.roundedRect(R-92,y,92,32,4,4);
     doc.setFont("times","bold");doc.setFontSize(18);col(GREEN);{const pw=doc.getTextWidth("PAID")+2*3;doc.setCharSpace(2);doc.text("PAID",R-46-pw/2,y+22);doc.setCharSpace(0);} y+=48;
   } else {
@@ -689,29 +763,29 @@ function saveBlob(file){ const u=URL.createObjectURL(file); const a=document.cre
 async function sendPdf(o){
   let file; try{ toast("Building PDF…"); file=await buildInvoicePdf(o); }catch(e){ toast("Couldn't build PDF — check connection"); return; }
   if(canShareFiles()){
-    try{ await navigator.share({files:[file],title:invSubject(o),text:`Invoice HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`}); }
+    try{ await navigator.share({files:[file],title:invSubject(o),text:invSubject(o)}); }
     catch(e){ if(e&&e.name==="AbortError") return; saveBlob(file); toast("PDF saved — attach it to your message"); return; }
-    await markSent(o); toast("Invoice sent ✌"); return;
+    await markSent(o); toast(`${docType(o)} sent ✌`); return;
   }
   saveBlob(file); toast("PDF saved — attach it to your message"); await markSent(o);
 }
 async function downloadPdf(o){ try{ toast("Building PDF…"); saveBlob(await buildInvoicePdf(o)); toast("PDF saved"); }catch(e){ toast("Couldn't build PDF — check connection"); } }
 function ticketText(o){const L=[`${S.settings.shop||"Hippy List"} — WORK TICKET`,`Order HL-${o.ref||""} · ${o.customer.name||""}`];if(o.customer.due)L.push("DUE: "+fmtDate(o.customer.due));L.push("Stage: "+stageOf(o.status).label,"");o.items.forEach(it=>{L.push(`[ ] ${+it.qty||0}x  ${it.garment} (${it.size})`);L.push(`      ${it.technique} · ${it.palette} · ${it.colors} dye colors`);});if(o.notes){L.push("","NOTES: "+o.notes);}return L.join("\n");}
 function downloadTicket(o){downloadFile(`HippyList-HL${o.ref||""}.txt`,ticketText(o));}
-function exportOrders(){const rows=[["Order","Customer","Type","Stage","Pieces","Due","Rush","Total","Deposit","Paid","Created"]];S.orders.forEach(o=>rows.push([`HL-${o.ref||""}`,o.customer.name||"",o.customer.kind||"",stageOf(o.status).label,orderPieces(o),o.customer.due||"",rushOn(o)?rushOf(o).toFixed(2):"",orderTotal(o).toFixed(2),(+o.deposit||0).toFixed(2),o.paid?"yes":"no",(o.createdAt||"").slice(0,10)]));downloadFile("hippy-orders.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
+function exportOrders(){const rows=[["Order","Customer","Type","Stage","Pieces","Due","Rush","Sales tax","Total","Deposit","Paid","Created"]];S.orders.forEach(o=>rows.push([`HL-${o.ref||""}`,o.customer.name||"",o.customer.kind||"",stageOf(o.status).label,orderPieces(o),o.customer.due||"",rushOn(o)?rushOf(o).toFixed(2):"",taxOf(o)?taxOf(o).toFixed(2):"",orderTotal(o).toFixed(2),(+o.deposit||0).toFixed(2),o.paid?"yes":"no",(o.createdAt||"").slice(0,10)]));downloadFile("hippy-orders.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
 function exportCustomers(){const rows=[["Name","Type","Phone","Email","Orders","Lifetime"]];custAgg().forEach(c=>rows.push([c.name,c.kind,c.phone||"",c.email||"",c.orders,c.spent.toFixed(2)]));downloadFile("hippy-customers.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
 function downloadFile(name,text){const b=new Blob([text],{type:"text/plain"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1500);}
 
 /* ─────────── Helpers ─────────── */
 function freshItem(){return {garment:S.pricing.blanks[0].name,size:"L",qty:1,technique:S.pricing.techniques[0].name,palette:"Rainbow",colors:3,price:""};}
-function freshDraft(){return {customer:{name:"",phone:"",email:"",due:"",kind:"retail",rush:false},items:[freshItem()],deposit:"",notes:""};}
-function loadDraft(o){editId=o.id;draft={customer:{name:o.customer.name||"",phone:o.customer.phone||"",email:o.customer.email||"",due:o.customer.due||"",kind:o.customer.kind||"retail",rush:!!o.customer.rush},deposit:o.deposit||"",notes:o.notes||"",items:(o.items||[]).map(it=>({garment:it.garment,size:it.size,qty:it.qty,technique:it.technique,palette:it.palette,colors:it.colors,price:it.price==null?"":it.price}))};if(!draft.items.length)draft.items=[freshItem()];}
+function freshDraft(){return {customer:{name:"",phone:"",email:"",due:"",kind:"retail",rush:false,taxExempt:null},items:[freshItem()],deposit:"",notes:""};}
+function loadDraft(o){editId=o.id;draft={customer:{name:o.customer.name||"",phone:o.customer.phone||"",email:o.customer.email||"",due:o.customer.due||"",kind:o.customer.kind||"retail",rush:!!o.customer.rush,taxExempt:o.customer.taxExempt!=null?o.customer.taxExempt:null},deposit:o.deposit||"",notes:o.notes||"",items:(o.items||[]).map(it=>({garment:it.garment,size:it.size,qty:it.qty,technique:it.technique,palette:it.palette,colors:it.colors,price:it.price==null?"":it.price}))};if(!draft.items.length)draft.items=[freshItem()];}
 function rushOn(o){return o&&o.customer&&o.customer.rush?1:0;}
 function nextRef(){return Math.max(1000,...S.orders.map(o=>+o.ref||0))+1;}
 function clone(o){return JSON.parse(JSON.stringify(o));}
 function num(v){const n=parseFloat(v);return isNaN(n)?0:n;}
 function uid(){return "x"+Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
-function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});if(!o.rush||typeof o.rush!=="object")o.rush=clone(DEFAULT_PRICING.rush);if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
+function normalizePricing(p){const b=clone(DEFAULT_PRICING),o=Object.assign(b,p||{});if(!o.rush||typeof o.rush!=="object")o.rush=clone(DEFAULT_PRICING.rush);if(o.taxRate==null)o.taxRate=0;if(!Array.isArray(o.materials)||!o.materials.length)o.materials=clone(DEFAULT_PRICING.materials);if(!Array.isArray(o.blanks)||!o.blanks.length)o.blanks=clone(DEFAULT_PRICING.blanks);if(!Array.isArray(o.techniques)||!o.techniques.length)o.techniques=clone(DEFAULT_PRICING.techniques);return o;}
 function money(n){n=+n||0;return "$"+n.toLocaleString("en-US",{minimumFractionDigits:(n%1?2:0),maximumFractionDigits:2});}
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function csv(s){s=String(s==null?"":s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
