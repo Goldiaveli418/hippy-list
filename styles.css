@@ -232,3 +232,14 @@ table.data .nm{font-family:var(--display);font-weight:600;font-size:15.5px}
   .li-grid>label:first-child,.li-grid2>label:first-child{grid-column:1/-1}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* ── Send invoice ── */
+.send-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.send-btn{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:var(--r);padding:11px 12px;cursor:pointer;min-width:0}
+.send-btn:hover{border-color:var(--berry)}
+.send-btn .si{width:22px;display:flex;justify-content:center;flex:none;color:var(--berry)}
+.send-btn b{display:block;font-size:13.5px;font-weight:700}
+.send-btn small{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.send-btn>span:last-child{min-width:0}
+.send-btn.off{opacity:.55}
+.sent-tag{margin-left:6px;color:#2f9c6a;font-weight:700;letter-spacing:0;text-transform:none}
