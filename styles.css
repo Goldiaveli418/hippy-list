@@ -243,3 +243,5 @@ table.data .nm{font-family:var(--display);font-weight:600;font-size:15.5px}
 .send-btn>span:last-child{min-width:0}
 .send-btn.off{opacity:.55}
 .sent-tag{margin-left:6px;color:#2f9c6a;font-weight:700;letter-spacing:0;text-transform:none}
+.send-btn.primary{background:var(--berry);border-color:var(--berry);color:#fff}
+.send-btn.primary .si,.send-btn.primary small{color:rgba(255,255,255,.85)}

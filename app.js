@@ -540,24 +540,21 @@ function renderOrderDrawer(){
     <div><div class="dr-sec-t">Finished pieces</div><div class="photo-grid">${(o.photos||[]).map(u=>`<img src="${esc(u)}" alt="piece">`).join("")}<label class="photo-add">+<input type="file" accept="image/*" id="drPhoto" hidden></label></div></div>
     <div><div class="dr-sec-t">Send invoice${o.customer.invoicedAt?` <span class="sent-tag">✓ Sent ${fmtShort(o.customer.invoicedAt)}</span>`:""}</div>
       <div class="send-grid">
-        <button class="send-btn${o.customer.phone?"":" off"}" id="sdText"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/></svg></span><span><b>Text it</b><small>${esc(o.customer.phone||"No phone yet")}</small></span></button>
-        <button class="send-btn${o.customer.email?"":" off"}" id="sdEmail"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><span><b>Email it</b><small>${esc(o.customer.email||"No email yet")}</small></span></button>
-        ${navigator.share?`<button class="send-btn" id="sdShare"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span><span><b>Share…</b><small>Any app</small></span></button>`:""}
-        <button class="send-btn" id="sdPdf"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M7 14h10v7H7z"/></svg></span><span><b>PDF / print</b><small>Clean invoice</small></span></button>
+        <button class="send-btn primary" id="sdSend"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg></span><span><b>Send PDF</b><small>${canShareFiles()?"Text, email, DM…":"Download + attach"}</small></span></button>
+        <button class="send-btn" id="sdPdf"><span class="si"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg></span><span><b>Download PDF</b><small>Save or print</small></span></button>
       </div>
+      ${o.customer.invoicedAt?"":`<button class="linkbtn" id="sdMark" style="margin-top:10px">Sent it another way? Mark as sent</button>`}
       ${S.settings.payWith?"":`<div class="hint">Tip: add how customers pay you (Venmo, Cash App…) in <a href="#" id="sdSet">Settings</a> and it goes on every invoice.</div>`}</div>
-    <div><div class="dr-sec-t">Hand off</div><div class="seg handoff"><button id="drCopy">⧉ Copy invoice</button><button id="drTicket">⤓ Work ticket</button></div></div>
+    <div><div class="dr-sec-t">Hand off</div><div class="seg handoff"><button id="drTicket">⤓ Work ticket</button></div></div>
   </div>
   <div class="dr-foot"><button class="btn danger ghost" id="drDel">Delete</button><button class="btn" id="drEdit">Edit</button><button class="btn berry block" id="drDone">Done</button></div>`;
   d.querySelector("#drClose").onclick=closeDrawer; d.querySelector("#drDone").onclick=closeDrawer;
   d.querySelector("#drDel").onclick=()=>{removeOrder(o.id);closeDrawer();};
   d.querySelector("#drEdit").onclick=()=>{loadDraft(o);closeDrawer();tab="new";renderApp();};
   d.querySelector("#drPaid").onclick=()=>togglePaid(o.id);
-  d.querySelector("#drCopy").onclick=()=>copyInvoice(o);
-  d.querySelector("#sdText").onclick=()=>sendInvoice(o,"text");
-  d.querySelector("#sdEmail").onclick=()=>sendInvoice(o,"email");
-  d.querySelector("#sdPdf").onclick=()=>printInvoice(o);
-  const shb=d.querySelector("#sdShare"); if(shb) shb.onclick=()=>sendInvoice(o,"share");
+  d.querySelector("#sdSend").onclick=()=>sendPdf(o);
+  d.querySelector("#sdPdf").onclick=()=>downloadPdf(o);
+  const smk=d.querySelector("#sdMark"); if(smk) smk.onclick=()=>{markSent(o);toast("Marked as sent");};
   const sst=d.querySelector("#sdSet"); if(sst) sst.onclick=e=>{e.preventDefault();closeDrawer();tab="settings";renderApp();};
   d.querySelector("#drTicket").onclick=()=>downloadTicket(o);
   d.querySelectorAll("#drSeg button").forEach(b=>b.onclick=()=>changeStatus(o.id,b.dataset.st));
@@ -587,67 +584,90 @@ async function addPhoto(o,file){
 
 /* ─────────── Hand-off / export ─────────── */
 function invTotals(o){const sub=orderSubtotal(o),chg=(o.orderCharge!=null)?+o.orderCharge||0:0,tot=sub+chg,dep=o.paid?tot:(+o.deposit||0);return {sub,chg,tot,dep,bal:tot-dep};}
-function invoiceText(o){const t=invTotals(o);const L=[`${S.settings.shop||"Hippy List"} — Invoice HL-${o.ref||""}`,o.customer.name||""];if(o.customer.due)L.push("Needed by "+fmtDate(o.customer.due));L.push("");o.items.forEach(it=>L.push(`${+it.qty||0}x ${it.garment} ${it.size} — ${it.technique}, ${it.palette}, ${it.colors} colors   ${money(itemUnit(it)*(+it.qty||0))}`));L.push("");L.push(`Subtotal   ${money(t.sub)}`);if(t.chg>0)L.push(`Order charge   ${money(t.chg)}`);L.push(`TOTAL   ${money(t.tot)}`);if(o.paid)L.push("PAID IN FULL — thank you!");else{if(t.dep>0)L.push(`Deposit paid   ${money(t.dep)}`);L.push(`BALANCE DUE   ${money(t.bal)}`);if(S.settings.payWith)L.push("","Pay with: "+S.settings.payWith);}if(S.settings.invoiceNote)L.push("",S.settings.invoiceNote);return L.join("\n");}
 function invSubject(o){return `Invoice HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`;}
-function isIOS(){return /iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);}
-async function sendInvoice(o,via){
-  const c=o.customer||{};
-  if(via==="text"){ if(!c.phone){toast("Add a phone number — tap Edit");return;} const n=c.phone.replace(/[^\d+]/g,""); location.href=`sms:${n}${isIOS()?"&":"?"}body=${encodeURIComponent(invoiceText(o))}`; }
-  else if(via==="email"){ if(!c.email){toast("Add an email — tap Edit");return;} location.href=`mailto:${encodeURIComponent(c.email)}?subject=${encodeURIComponent(invSubject(o))}&body=${encodeURIComponent(invoiceText(o))}`; }
-  else if(via==="share"){ try{ await navigator.share({title:invSubject(o),text:invoiceText(o)}); }catch(e){ return; } }
-  await markSent(o);
-}
 async function markSent(o){ o.customer={...o.customer,invoicedAt:new Date().toISOString()}; if(LIVE){try{await sb.from("orders").update({customer:o.customer}).eq("id",o.id);}catch(e){}} else saveLocal(); if(openId===o.id) renderDrawer(); }
-function invoiceHtml(o){
-  const t=invTotals(o),st=S.settings,today=new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"});
-  const rows=o.items.map(it=>{const q=+it.qty||0,u=itemUnit(it);return `<tr><td class="q">${q}</td><td><b>${esc(it.garment)}</b> · ${esc(it.size)}<div class="det">${esc(it.technique)} · ${esc(it.palette)} · ${+it.colors||0} colors</div></td><td class="r">${money(u)}</td><td class="r">${money(u*q)}</td></tr>`;}).join("");
-  const from=[st.owner,st.contact,st.email].filter(Boolean).map(esc).join("<br>");
-  const to=[`<b>${esc(o.customer.name||"")}</b>`,esc(o.customer.phone||""),esc(o.customer.email||"")].filter(Boolean).join("<br>");
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(invSubject(o))}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;600;700&display=swap">
-<style>
-*{box-sizing:border-box}body{margin:0;background:#efece4;color:#1f1b16;font:14px/1.5 "Hanken Grotesk",system-ui,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.page{max-width:760px;margin:24px auto;background:#fffdf8;border:1px solid #ddd6c8;border-radius:10px;padding:44px 48px}
-.top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:2px solid #1f1b16;padding-bottom:22px}
-.shop{font:600 30px/1.1 Fraunces,Georgia,serif;letter-spacing:-.01em}.from{color:#6b6357;margin-top:6px;font-size:13px}
-.inv{text-align:right}.inv .t{font:600 13px "Hanken Grotesk";letter-spacing:.14em;text-transform:uppercase;color:#b5235a}.inv .n{font:600 26px Fraunces,Georgia,serif}.inv .d{color:#6b6357;font-size:13px}
-.meta{display:flex;gap:40px;margin:24px 0 8px}.meta .l{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8a8174;font-weight:700;margin-bottom:4px}
-table{width:100%;border-collapse:collapse;margin-top:18px}th{text-align:left;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8a8174;border-bottom:1px solid #ddd6c8;padding:8px 6px}
-td{padding:12px 6px;border-bottom:1px solid #eee8dc;vertical-align:top}.q{width:44px;font-weight:700}.r{text-align:right;white-space:nowrap}th.r{text-align:right}.det{color:#6b6357;font-size:12.5px}
-.tot{margin-left:auto;width:300px;margin-top:16px}.tot div{display:flex;justify-content:space-between;padding:5px 0;color:#6b6357}.tot b{color:#1f1b16}
-.tot .grand{border-top:2px solid #1f1b16;margin-top:6px;padding-top:10px;color:#1f1b16;font:600 22px Fraunces,Georgia,serif}
-.tot .due{background:#b5235a;color:#fff;border-radius:6px;padding:10px 12px;margin-top:8px;font-weight:700}.tot .due b,.tot .due span{color:#fff}
-.stamp{display:inline-block;border:3px solid #2f9c6a;color:#2f9c6a;font:600 20px Fraunces,serif;letter-spacing:.1em;padding:4px 14px;border-radius:6px;transform:rotate(-4deg);margin-top:14px}
-.pay{margin-top:28px;background:#f6f1e6;border-radius:8px;padding:14px 16px;white-space:pre-wrap}.pay .l{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8a8174;font-weight:700;margin-bottom:4px}
-.note{margin-top:22px;text-align:center;color:#6b6357;font-style:italic;font-family:Fraunces,Georgia,serif}
-.bar{max-width:760px;margin:16px auto 0;display:flex;gap:10px;justify-content:flex-end;padding:0 12px}.bar button{font:700 14px "Hanken Grotesk";border:0;border-radius:999px;padding:11px 20px;background:#b5235a;color:#fff;cursor:pointer}.bar button.g{background:#fff;color:#1f1b16;border:1px solid #ddd6c8}
-@media(max-width:600px){.page{margin:12px;padding:26px 20px}.top{flex-direction:column}.inv{text-align:left}.meta{flex-direction:column;gap:14px}.tot{width:100%}}
-@media print{body{background:#fff}.bar{display:none}.page{border:0;margin:0;max-width:none;padding:0}}
-</style></head><body>
-<div class="bar"><button class="g" onclick="window.close()">Close</button><button onclick="window.print()">Print / Save as PDF</button></div>
-<div class="page">
-<div class="top"><div><div class="shop">${esc(st.shop||"Hippy List")}</div>${from?`<div class="from">${from}</div>`:""}</div>
-<div class="inv"><div class="t">Invoice</div><div class="n">HL-${o.ref||""}</div><div class="d">${today}</div></div></div>
-<div class="meta"><div><div class="l">Bill to</div>${to}</div>${o.customer.due?`<div><div class="l">Needed by</div>${fmtDate(o.customer.due)}</div>`:""}</div>
-<table><thead><tr><th>Qty</th><th>Item</th><th class="r">Each</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>
-<div class="tot"><div><span>Subtotal</span><b>${money(t.sub)}</b></div>${t.chg>0?`<div><span>Order charge</span><b>${money(t.chg)}</b></div>`:""}
-<div class="grand"><span>Total</span><span>${money(t.tot)}</span></div>
-${o.paid?"":`${t.dep>0?`<div><span>Deposit paid</span><b>−${money(t.dep)}</b></div>`:""}<div class="due"><span>Balance due</span><b>${money(t.bal)}</b></div>`}</div>
-${o.paid?`<div style="text-align:right"><span class="stamp">PAID</span></div>`:""}
-${!o.paid&&st.payWith?`<div class="pay"><div class="l">How to pay</div>${esc(st.payWith)}</div>`:""}
-${st.invoiceNote?`<div class="note">${esc(st.invoiceNote)}</div>`:""}
-</div></body></html>`;
+/* PDF invoices — built on-device with jsPDF (vector text, loads on first use) */
+let jspdfP=null;
+function loadJsPDF(){ if(window.jspdf) return Promise.resolve(window.jspdf); if(jspdfP) return jspdfP;
+  jspdfP=new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";s.onload=()=>res(window.jspdf);s.onerror=()=>{jspdfP=null;rej(new Error("jspdf"));};document.head.appendChild(s);});
+  return jspdfP; }
+function pdfSafe(s){ return String(s==null?"":s).replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/[−–]/g,"-").replace(/…/g,"...").replace(/[^\x09\x0A\x0D\x20-\x7E -ÿ—€]/g,"").trim(); }
+function invFileName(o){ return `Invoice-HL-${o.ref||""}-${(S.settings.shop||"Hippy List").replace(/[^A-Za-z0-9]+/g,"-").replace(/^-|-$/g,"")}.pdf`; }
+async function buildInvoicePdf(o){
+  const {jsPDF}=await loadJsPDF();
+  const doc=new jsPDF({unit:"pt",format:"letter"}), W=612, H=792, M=54, R=W-M;
+  const t=invTotals(o), st=S.settings, c=o.customer||{};
+  const INK=[31,27,22], MUTED=[107,99,87], FAINT=[138,129,116], LINE=[221,214,200], BERRY=[181,35,90], GREEN=[47,156,106];
+  const col=a=>doc.setTextColor(a[0],a[1],a[2]);
+  const txt=(s,x,y,o2)=>doc.text(pdfSafe(s),x,y,o2||{});
+  const spaced=(s,x,y,cs,al)=>{s=pdfSafe(s);doc.setCharSpace(cs);const w=doc.getTextWidth(s)+cs*Math.max(0,s.length-1);doc.text(s,al==="right"?x-w:x,y);doc.setCharSpace(0);};
+  const label=(s,x,y,al)=>{doc.setFont("helvetica","bold");doc.setFontSize(8);col(FAINT);spaced(s.toUpperCase(),x,y,1.2,al);};
+  let y=M+14;
+  // header
+  doc.setFont("times","bold");doc.setFontSize(26);col(INK);txt(st.shop||"Hippy List",M,y+10);
+  doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);
+  let fy=y+30;[st.owner,st.contact,st.email].filter(Boolean).forEach(l=>{txt(l,M,fy);fy+=14;});
+  doc.setFont("helvetica","bold");doc.setFontSize(9);col(BERRY);spaced("INVOICE",R,y-2,1.6,"right");
+  doc.setFont("times","bold");doc.setFontSize(22);col(INK);txt(`HL-${o.ref||""}`,R,y+20,{align:"right"});
+  doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);txt(new Date().toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}),R,y+36,{align:"right"});
+  y=Math.max(fy,y+44)+8; doc.setDrawColor(INK[0],INK[1],INK[2]);doc.setLineWidth(1.6);doc.line(M,y,R,y);
+  // bill to / needed by
+  y+=28; label("Bill to",M,y); if(c.due) label("Needed by",M+300,y);
+  doc.setFont("helvetica","bold");doc.setFontSize(11);col(INK);txt(c.name||"",M,y+17);
+  doc.setFont("helvetica","normal");doc.setFontSize(10);col(MUTED);let by=y+32;[c.phone,c.email].filter(Boolean).forEach(l=>{txt(l,M,by);by+=14;});
+  if(c.due){doc.setFont("helvetica","normal");doc.setFontSize(11);col(INK);txt(fmtDate(c.due),M+300,y+17);}
+  y=by+18;
+  // table
+  const cQ=M, cI=M+40, cE=R-90, cA=R;
+  const head=()=>{label("Qty",cQ,y);label("Item",cI,y);label("Each",cE,y,"right");label("Amount",cA,y,"right");y+=8;doc.setDrawColor(LINE[0],LINE[1],LINE[2]);doc.setLineWidth(.8);doc.line(M,y,R,y);y+=18;};
+  head();
+  (o.items||[]).forEach(it=>{
+    const q=+it.qty||0,u=itemUnit(it); const det=doc.splitTextToSize(pdfSafe(`${it.technique} · ${it.palette} · ${+it.colors||0} colors`),cE-cI-70);
+    const rowH=16+det.length*12+8; if(y+rowH>H-M-40){doc.addPage();y=M+10;head();}
+    doc.setFont("helvetica","bold");doc.setFontSize(11);col(INK);txt(String(q),cQ,y);txt(`${it.garment}`,cI,y);
+    const gw=doc.getTextWidth(pdfSafe(it.garment));doc.setFont("helvetica","normal");col(MUTED);txt(`·  ${it.size}`,cI+gw+4,y);
+    col(INK);txt(money(u),cE,y,{align:"right"});txt(money(u*q),cA,y,{align:"right"});
+    doc.setFontSize(9.5);col(MUTED);doc.text(det,cI,y+14);
+    y+=rowH; doc.setDrawColor(238,232,220);doc.setLineWidth(.6);doc.line(M,y-12,R,y-12);
+  });
+  // totals
+  const need=150+(st.payWith&&!o.paid?70:0)+(st.invoiceNote?30:0); if(y+need>H-M){doc.addPage();y=M+10;}
+  const tx=R-230; y+=8;
+  const trow=(l,v)=>{doc.setFont("helvetica","normal");doc.setFontSize(10.5);col(MUTED);txt(l,tx,y);doc.setFont("helvetica","bold");col(INK);txt(v,R,y,{align:"right"});y+=18;};
+  trow("Subtotal",money(t.sub)); if(t.chg>0) trow("Order charge",money(t.chg));
+  doc.setDrawColor(INK[0],INK[1],INK[2]);doc.setLineWidth(1.6);doc.line(tx,y-6,R,y-6); y+=16;
+  doc.setFont("times","bold");doc.setFontSize(18);col(INK);txt("Total",tx,y);txt(money(t.tot),R,y,{align:"right"}); y+=22;
+  if(o.paid){
+    doc.setDrawColor(GREEN[0],GREEN[1],GREEN[2]);doc.setLineWidth(2.4);doc.roundedRect(R-92,y,92,32,4,4);
+    doc.setFont("times","bold");doc.setFontSize(18);col(GREEN);{const pw=doc.getTextWidth("PAID")+2*3;doc.setCharSpace(2);doc.text("PAID",R-46-pw/2,y+22);doc.setCharSpace(0);} y+=48;
+  } else {
+    if(t.dep>0) trow("Deposit paid","-"+money(t.dep));
+    doc.setFillColor(BERRY[0],BERRY[1],BERRY[2]);doc.roundedRect(tx-10,y-4,R-tx+10,30,4,4,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(11.5);doc.setTextColor(255,255,255);txt("Balance due",tx,y+15);txt(money(t.bal),R-10,y+15,{align:"right"}); y+=46;
+  }
+  // how to pay
+  if(st.payWith&&!o.paid){
+    const pl=doc.splitTextToSize(pdfSafe(st.payWith),R-M-28); const bh=34+pl.length*14;
+    doc.setFillColor(246,241,230);doc.roundedRect(M,y,R-M,bh,6,6,"F"); label("How to pay",M+14,y+18);
+    doc.setFont("helvetica","normal");doc.setFontSize(11);col(INK);doc.text(pl,M+14,y+34); y+=bh+20;
+  }
+  if(st.invoiceNote){doc.setFont("times","italic");doc.setFontSize(12);col(MUTED);txt(st.invoiceNote,W/2,y+6,{align:"center"});}
+  doc.setProperties({title:invSubject(o),author:st.shop||"Hippy List"});
+  return new File([doc.output("blob")],invFileName(o),{type:"application/pdf"});
 }
-function printInvoice(o){
-  const html=invoiceHtml(o);
-  const w=window.open("","_blank");
-  if(w){ w.document.open(); w.document.write(html); w.document.close(); return; }
-  const f=document.createElement("iframe"); f.style.cssText="position:fixed;right:0;bottom:0;width:0;height:0;border:0"; document.body.appendChild(f);
-  const d=f.contentWindow.document; d.open(); d.write(html); d.close();
-  setTimeout(()=>{try{f.contentWindow.focus();f.contentWindow.print();}catch(e){toast("Couldn't open print");} setTimeout(()=>f.remove(),60000);},600);
+function canShareFiles(){ try{ return !!(navigator.canShare&&navigator.canShare({files:[new File(["x"],"x.pdf",{type:"application/pdf"})]})); }catch(e){ return false; } }
+function saveBlob(file){ const u=URL.createObjectURL(file); const a=document.createElement("a"); a.href=u; a.download=file.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),4000); }
+async function sendPdf(o){
+  let file; try{ toast("Building PDF…"); file=await buildInvoicePdf(o); }catch(e){ toast("Couldn't build PDF — check connection"); return; }
+  if(canShareFiles()){
+    try{ await navigator.share({files:[file],title:invSubject(o),text:`Invoice HL-${o.ref||""} from ${S.settings.shop||"Hippy List"}`}); }
+    catch(e){ if(e&&e.name==="AbortError") return; saveBlob(file); toast("PDF saved — attach it to your message"); return; }
+    await markSent(o); toast("Invoice sent ✌"); return;
+  }
+  saveBlob(file); toast("PDF saved — attach it to your message"); await markSent(o);
 }
+async function downloadPdf(o){ try{ toast("Building PDF…"); saveBlob(await buildInvoicePdf(o)); toast("PDF saved"); }catch(e){ toast("Couldn't build PDF — check connection"); } }
 function ticketText(o){const L=[`${S.settings.shop||"Hippy List"} — WORK TICKET`,`Order HL-${o.ref||""} · ${o.customer.name||""}`];if(o.customer.due)L.push("DUE: "+fmtDate(o.customer.due));L.push("Stage: "+stageOf(o.status).label,"");o.items.forEach(it=>{L.push(`[ ] ${+it.qty||0}x  ${it.garment} (${it.size})`);L.push(`      ${it.technique} · ${it.palette} · ${it.colors} dye colors`);});if(o.notes){L.push("","NOTES: "+o.notes);}return L.join("\n");}
-function copyInvoice(o){const t=invoiceText(o);(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>toast("Invoice copied"),()=>{const ta=document.createElement("textarea");ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand("copy");toast("Invoice copied");}catch(e){toast("Copy failed");}ta.remove();});}
 function downloadTicket(o){downloadFile(`HippyList-HL${o.ref||""}.txt`,ticketText(o));}
 function exportOrders(){const rows=[["Order","Customer","Type","Stage","Pieces","Due","Total","Deposit","Paid","Created"]];S.orders.forEach(o=>rows.push([`HL-${o.ref||""}`,o.customer.name||"",o.customer.kind||"",stageOf(o.status).label,orderPieces(o),o.customer.due||"",orderTotal(o).toFixed(2),(+o.deposit||0).toFixed(2),o.paid?"yes":"no",(o.createdAt||"").slice(0,10)]));downloadFile("hippy-orders.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
 function exportCustomers(){const rows=[["Name","Type","Phone","Email","Orders","Lifetime"]];custAgg().forEach(c=>rows.push([c.name,c.kind,c.phone||"",c.email||"",c.orders,c.spent.toFixed(2)]));downloadFile("hippy-customers.csv",rows.map(r=>r.map(csv).join(",")).join("\n"));toast("Exported");}
